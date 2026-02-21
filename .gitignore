@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# virtual environments
+.venv/
+env/
+venv/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# data files
+*.csv
+*.jpg
+*.jpeg
+*.png
+*.npy
+*.npz
+
+# logs
+*.log
+
+# large raw ECG data
+data/
