@@ -31,15 +31,38 @@ class BeatCalc:
         self.n_beats = len(self.peaks)
         self.r_series = time[self.peaks]
         self.rr_intervals = np.diff(self.r_series)
+        self.rr_s, self.rr_clean = self.get_clean_rr()
+        self.hr, self.sdnn, self.rmssd = self.calc_hrv()
 
-        if len(self.rr_intervals) > 0:
-            self.hr = 60 / np.mean(self.rr_intervals)
-            self.sdnn = np.std(self.rr_intervals*1000, ddof=1)
-            self.rmssd = np.sqrt(np.mean(np.diff(self.rr_intervals*1000)**2))
+
+    def get_clean_rr(self):
+        rr = self.rr_intervals.copy()
+        t_rr = self.r_series[1:]
+        rr_s = pd.Series(rr, index=t_rr, dtype=float)
+
+        # 物理边界剔除
+        rr_s[(rr_s < 0.50) | (rr_s > 2.00)] = np.nan
+
+        # 跳变剔除（相邻差分）
+        drr = rr_s.diff().abs()
+        rr_s[drr > 0.20] = np.nan
+        rel = (rr_s.diff().abs() / rr_s.shift(1)).abs()
+        rr_s[rel > 0.25] = np.nan
+
+        rr_clean = rr_s.interpolate(limit=3).dropna()
+        return rr_s, rr_clean
+    
+    def calc_hrv(self):
+        if len(self.rr_clean) > 0:
+            hr = 60 / np.mean(self.rr_clean)
+            sdnn = np.std(self.rr_clean*1000, ddof=1)
+            rmssd = np.sqrt(np.mean(np.diff(self.rr_clean*1000)**2))
         else:
-            self.hr = np.nan
-            self.sdnn = np.nan
-            self.rmssd = np.nan
+            hr = np.nan
+            sdnn = np.nan
+            rmssd = np.nan
+        return hr, sdnn, rmssd
+        
 
     def ecg_info(self):
         formatted_duration = time.strftime('%H:%M:%S', time.gmtime(self.duration))
