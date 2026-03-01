@@ -76,7 +76,15 @@ class BeatCalc:
         )
         return info_text
 
-    
+
+class BeatCalcFS:
+    def __init__(self, df, ecg, fs):
+        self.ecg = df[ecg]
+        self.fs = fs
+        distance = int(self.fs * 60 / 200)
+        self.peaks, _ = find_peaks(self.ecg, height=450, distance=distance)
+        self.rr_intervals = np.diff(self.peaks)/self.fs
+
 # ------- Tools --------
 
 def random_time_slice(df, s, time_col="time", seed=None):
