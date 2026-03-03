@@ -10,7 +10,10 @@ data_path = '../ecg_data/'
 file_name = 'ecg_log_2025-11-17_130244.csv'
 
 def read_ecg_df(ecg_csv):
-    df = pd.read_csv(ecg_csv)
+    if ecg_csv[-3] == 'csv':
+        df = pd.read_csv(ecg_csv)
+    elif ecg_csv[-7:] == 'parquet':
+        df = pd.read_parquet(ecg_csv)
     return df
 
 def parse_args():
@@ -29,7 +32,7 @@ df = read_ecg_df(args.ecg_csv)
 time_array = df["time"].values
 ecg_array = df["ecg"].values
 
-window_sec = 40; fs = 50
+window_sec = 40; fs = 250
 window_size = int(window_sec * fs)
 detail_sec = 10
 detail_window_size = int(detail_sec * fs)

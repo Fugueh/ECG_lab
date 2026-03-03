@@ -30,4 +30,5 @@ Thumbs.db
 
 # large raw ECG data
 data/
+*.pt
 
