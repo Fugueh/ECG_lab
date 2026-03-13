@@ -1,14 +1,15 @@
 import os, re
 import pandas as pd
+from pathlib import Path
 
-def split_record_into_chunks(record_path):
+def split_record_into_chunks(record_path: Path) -> list:
     data = pd.read_parquet(record_path)
     window_size = 10 * 250
     chunks = [data[i:i + window_size] for i in range(0, len(data), window_size)][:-1]
     return chunks
 
 
-def build_raw_chunk_table(chunks, record_id):
+def build_raw_chunk_table(chunks: list, record_id: str) -> pd.DataFrame:
     chunk_dict = {}
     for i, chunk in enumerate(chunks):
         chunk = chunk.copy()
@@ -29,12 +30,13 @@ def build_raw_chunk_table(chunks, record_id):
     return chunk_df
 
 
-def get_record_id_from_path(record_path):
-    record_id = re.search(r'\d{4}-\d{2}-\d{2}_\d{6}', record_path).group()
+def get_record_id_from_path(record_path: Path) -> str:
+    str_path = str(record_path)
+    record_id = re.search(r'\d{4}-\d{2}-\d{2}_\d{6}', str_path).group()
     return record_id
 
 
-def raw_record_file_to_chunk_table(record_path):
+def raw_record_file_to_chunk_table(record_path: Path) -> pd.DataFrame:
     chunks = split_record_into_chunks(record_path)
     record_id = get_record_id_from_path(record_path)
     chunks_df = build_raw_chunk_table(chunks, record_id)
@@ -42,13 +44,13 @@ def raw_record_file_to_chunk_table(record_path):
 
 
 if __name__ == '__main__':
-    raw_chunk_path = 'E:/ECG_data/250hz/chunks/raw_chunks/'
-    raw_data_path = 'E:/ECG_data/250hz/records/raw/'
-    records = os.listdir(raw_data_path)
-    record_paths = [raw_data_path+record for record in records]
+    raw_chunk_path = Path('E:/ECG_data/250hz/chunks/raw_chunk')
+    raw_data_path = Path('../tmp/')
+    records = sorted(raw_data_path.glob("raw_record_*.parquet"))
+    record_paths = [record for record in records]
 
     for record_path in record_paths:
         record_id = get_record_id_from_path(record_path)
         chunk_table = raw_record_file_to_chunk_table(record_path)
-        chunk_table.to_parquet(raw_chunk_path+f"raw_chunks_{record_id}.parquet")
+        chunk_table.to_parquet(raw_chunk_path/f"raw_chunks_{record_id}.parquet")
         print('Chunk tables split:', record_id)
