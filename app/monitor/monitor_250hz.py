@@ -11,7 +11,7 @@ from functions import *
 
 # ---------- 日志文件 ----------
 formatted_time = time.strftime("%Y-%m-%d_%H%M%S", time.localtime())
-logfile = open("ecg_log_%s.csv"%formatted_time, "w")
+logfile = open("raw_record_%s.csv"%formatted_time, "w")
 logfile.write(f"time,ecg,lead\n")
 
 
