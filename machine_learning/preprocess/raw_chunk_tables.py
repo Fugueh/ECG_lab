@@ -21,7 +21,7 @@ def build_raw_chunk_table(chunks: list, record_id: str) -> pd.DataFrame:
         chunk_dict[i] = [ecg, begin_idx, end_idx, begin_time, end_time]
     chunk_df = pd.DataFrame(chunk_dict).T
     chunk_df.columns = ['ecg_raw', 'begin_idx', 'end_idx', 'begin_time', 'end_time']
-    chunk_df['record_id'] = f"record_{record_id}"
+    chunk_df['record_id'] = f"{record_id}"
     chunk_df['chunk_idx'] = chunk_df.index
     chunk_df = chunk_df[
         ['record_id', 'chunk_idx', 'ecg_raw',
@@ -45,7 +45,8 @@ def raw_record_file_to_chunk_table(record_path: Path) -> pd.DataFrame:
 
 if __name__ == '__main__':
     raw_chunk_path = Path('E:/ECG_data/250hz/chunks/raw_chunk')
-    raw_data_path = Path('../tmp/')
+    raw_data_path = Path('E:/ECG_data/250hz/records/raw_record') # all records
+    raw_data_path = Path('../tmp') # Only new data
     records = sorted(raw_data_path.glob("raw_record_*.parquet"))
     record_paths = [record for record in records]
 
