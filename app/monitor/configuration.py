@@ -5,7 +5,7 @@ import time
 
 # ---------- 串口配置 ----------
 fs = 50
-time_window = 7
+time_window = 10
 WINDOW = time_window * fs
 SERIAL_PORT = "COM3"
 BAUD = 115200 

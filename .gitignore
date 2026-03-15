@@ -35,4 +35,4 @@ data/
 
 # other
 tmp/
-
+.vscode/
