@@ -37,38 +37,61 @@ plot.getAxis('bottom')
 #plot.setLabel('bottom', 'Time (s)', **{'color': '#AAA', 'font-size': '10pt'})
 
 # ---------- 文本显示 ----------
+distance = 85
+yloc = ymax+30
+roast_text = HUDText(
+    plot, text="", pos=(-time_window, yloc), 
+    color=(0, 255, 0), anchor=(0, 0), font_size=10
+)
 
 rr_text = HUDText(
-    plot, text="RR Interval: -- s", pos=(-time_window, ymax-20),
+    plot, text="RR Interval: -- s", pos=(-time_window, yloc-distance),
     color=(255, 255, 255), anchor=(0, 0), font_size=10
 )
 
 sdnn_text = HUDText(
-    plot, text="SDNN: -- ms", pos=(-time_window, ymax-100),
+    plot, text="SDNN: -- ms", pos=(-time_window, yloc-2*distance),
     color=(255, 255, 255), anchor=(0, 0), font_size=10
 )
 
 rmssd_text = HUDText(
-    plot, text="RMSSD: -- ms", pos=(-time_window, ymax-180),
+    plot, text="RMSSD: -- ms", pos=(-time_window, yloc-3*distance),
     color=(255, 255, 255), anchor=(0, 0), font_size=10
 )
 
 
 hr_text = HUDText(
-    plot, text="--", pos=(0, ymax+50),
+    plot, text="--", pos=(0, yloc+50),
     color=(0, 255, 0), anchor=(1, 0),
     font_size=50, bold=True
 )
 
 ecg_text = HUDText(
-    plot, text="ECG\nbpm", pos=(-3, ymax - 20), 
+    plot, text="ECG\nbpm", pos=(-3, yloc), 
     color=(0, 255, 0), anchor=(1, 0), font_size=10
 )
 
 lead_text = HUDText(
-    plot, text="NORMAL", pos=(-3, ymax - 200), 
+    plot, text="NORMAL", pos=(-3, yloc - 200), 
     color=(0, 255, 0), anchor=(1, 0), font_size=10
 )
+
+
+
+
+def hr_roast(hr):
+    if hr < 70:
+        return "你在摸鱼？"
+    elif hr >= 70 and hr < 80:
+        return "稳如老狗"
+    elif hr >=80 and hr < 90:
+        return "急了？"
+    elif hr >= 90 and hr < 100:
+        return "咋还急眼了呢？"
+    elif hr >= 100 and hr < 120:
+        return "你已急哭"
+    elif hr > 120:
+        return "你没毛病吧？"
 
 
 def update_hr_display(data, lead_data):
@@ -90,9 +113,11 @@ def update_hr_display(data, lead_data):
         # ---------- LEAD OFF 分支 ----------
         hr_text.set_text("--")
         rr_text.set_text("RR Interval: --")
+        roast_text.set_text("[--] 你人呢？")
         hr_text.set_color((255, 0, 0))
         ecg_text.set_color((255, 0, 0))
-
+        roast_text.set_color((255, 0, 0))
+        
         lead_text.set_text("LEAD OFF")
         lead_text.set_color((255, 0, 0))
         return
@@ -100,11 +125,14 @@ def update_hr_display(data, lead_data):
     # ---------- 正常心电分支 ----------
     rr, hr = rr_hr_calc(timestamps, peaks)
     color = text_color(hr)
-
     rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
     hr_text.set_text(f"{hr:.0f}")
     hr_text.set_color(color)
     ecg_text.set_color(color)
+
+    window_mean_hr = 60 / np.mean(rr)
+    roast_text.set_text(f"[Mean HR: {window_mean_hr:0=.0f}] "+hr_roast(window_mean_hr))
+    roast_text.set_color(text_color(window_mean_hr))
 
     lead_text.set_text("NORMAL")
     lead_text.set_color((0, 255, 0))
