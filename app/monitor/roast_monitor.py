@@ -3,6 +3,7 @@ import numpy as np
 from scipy.signal import find_peaks
 from pyqtgraph.Qt import QtCore, QtWidgets
 from PyQt5 import QtGui
+from PyQt5.QtGui import QIcon, QFont
 import pyqtgraph as pg
 import colorsys
 
@@ -17,6 +18,7 @@ logfile.write(f"time,ecg,lead\n")
 
 # ---------- PyQtGraph 初始化 ----------
 app = QtWidgets.QApplication([])
+app.setWindowIcon(QIcon("roast.ico"))
 win = pg.GraphicsLayoutWidget(title="急眼监视器 - Mini")
 # Always on the top
 win.setWindowFlags(win.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
@@ -24,17 +26,26 @@ win.resize(600, 250)
 win.show()
 
 win.setBackground('k')
-plot = win.addPlot(title="ECG Signal (Lead I)")
+plot = win.addPlot()
 curve_ecg = plot.plot(pen=pg.mkPen((0, 255, 0), width=1.2)) 
 
 plot.setXRange(-time_window, 0)
 ymin = 150; ymax = 860
 plot.setYRange(ymin, ymax)
-#plot.setLabel('left', 'Amplitude')
 plot.showGrid(x=True, y=True, alpha=0.3)
 
-plot.getAxis('bottom')
-#plot.setLabel('bottom', 'Time (s)', **{'color': '#AAA', 'font-size': '10pt'})
+yaxis = plot.getAxis('left')
+yaxis.setStyle(showValues=False)
+yaxis.setTicks([])
+
+xaxis = plot.getAxis('bottom')
+xticks_font = QFont("Arial", 10)
+xaxis.setStyle(tickFont=xticks_font)
+xaxis.setLabel(
+    text='Time',
+    units='s',
+    **{'color': '#AAA', 'font-size': '10pt', 'font-family': 'Arial'}
+)
 
 # ---------- 文本显示 ----------
 distance = 85
@@ -78,7 +89,9 @@ lead_text = HUDText(
 
 # ------------ 嘲讽字体 ------------
 def hr_roast(hr):
-    if hr < 70:
+    if hr < 60:
+        return "上班时间不许睡觉！"
+    elif hr >= 60 and hr < 70:
         return "你在摸鱼？"
     elif hr >= 70 and hr < 80:
         return "稳如老狗"
@@ -98,7 +111,10 @@ def hr_roast_color(hr):
     ratio = max(0, min(1, ratio))
     hue = (120 * (1 - ratio)) / 360
     r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
-    return int(r*255), int(g*255), int(b*255)
+    if hr >= 60:
+        return int(r*255), int(g*255), int(b*255)
+    else:
+        return (0, 180, 255)
 
 
 def set_text(rr, hr, lead_off, rr_text, hr_text, ecg_text, roast_text, window_mean_hr):
@@ -109,6 +125,8 @@ def set_text(rr, hr, lead_off, rr_text, hr_text, ecg_text, roast_text, window_me
         hr_text.set_text("-?-")
         rr_text.set_text("RR Interval: --")
         roast_text.set_text("[-?-] 你人呢？")
+        sdnn_text.set_text("SDNN: -- ms")
+        rmssd_text.set_text("RMSSD: -- ms")
 
         hr_text.set_color((255, 0, 0))
         ecg_text.set_color((255, 0, 0))
@@ -118,15 +136,15 @@ def set_text(rr, hr, lead_off, rr_text, hr_text, ecg_text, roast_text, window_me
         lead_text.set_text("NORMAL")
         lead_text.set_color((0, 255, 0))
 
-        color = text_color(hr)
+        #color = text_color(hr)
         roast_color = hr_roast_color(window_mean_hr)
 
         hr_text.set_text(f"{hr:.0f}")
         rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
         roast_text.set_text(f"[{window_mean_hr:0=.0f}] "+hr_roast(window_mean_hr))
 
-        hr_text.set_color(color)
-        ecg_text.set_color(color)
+        hr_text.set_color(roast_color)
+        ecg_text.set_color(roast_color)
         roast_text.set_color(roast_color)
 
         
