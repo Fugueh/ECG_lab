@@ -4,7 +4,7 @@ from scipy.signal import find_peaks
 from pyqtgraph.Qt import QtCore, QtWidgets
 from PyQt5 import QtGui
 import pyqtgraph as pg
-
+import colorsys
 
 from configuration import *
 from functions import *
@@ -40,7 +40,7 @@ plot.getAxis('bottom')
 distance = 85
 yloc = ymax+30
 roast_text = HUDText(
-    plot, text="", pos=(-time_window, yloc), 
+    plot, text="[--] Are you ok?", pos=(-time_window, yloc), 
     color=(0, 255, 0), anchor=(0, 0), font_size=10
 )
 
@@ -76,9 +76,7 @@ lead_text = HUDText(
     color=(0, 255, 0), anchor=(1, 0), font_size=10
 )
 
-
-
-
+# ------------ 嘲讽字体 ------------
 def hr_roast(hr):
     if hr < 70:
         return "你在摸鱼？"
@@ -93,6 +91,46 @@ def hr_roast(hr):
     elif hr > 120:
         return "你没毛病吧？"
 
+
+def hr_roast_color(hr):
+    hr_min, hr_max = 60, 120
+    ratio = (hr - hr_min) / (hr_max - hr_min)
+    ratio = max(0, min(1, ratio))
+    hue = (120 * (1 - ratio)) / 360
+    r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
+    return int(r*255), int(g*255), int(b*255)
+
+
+def set_text(rr, hr, lead_off, rr_text, hr_text, ecg_text, roast_text, window_mean_hr):
+    if lead_off:
+        lead_text.set_text("LEAD OFF")
+        lead_text.set_color((255, 0, 0))
+
+        hr_text.set_text("-?-")
+        rr_text.set_text("RR Interval: --")
+        roast_text.set_text("[-?-] 你人呢？")
+
+        hr_text.set_color((255, 0, 0))
+        ecg_text.set_color((255, 0, 0))
+        roast_text.set_color((255, 0, 0))
+        
+    else:
+        lead_text.set_text("NORMAL")
+        lead_text.set_color((0, 255, 0))
+
+        color = text_color(hr)
+        roast_color = hr_roast_color(window_mean_hr)
+
+        hr_text.set_text(f"{hr:.0f}")
+        rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
+        roast_text.set_text(f"[{window_mean_hr:0=.0f}] "+hr_roast(window_mean_hr))
+
+        hr_text.set_color(color)
+        ecg_text.set_color(color)
+        roast_text.set_color(roast_color)
+
+        
+# ============= 更新函数 =============
 
 def update_hr_display(data, lead_data):
     '''心率计算与显示（受 lead 状态约束）'''
@@ -109,33 +147,12 @@ def update_hr_display(data, lead_data):
     # 取当前窗口最后一个 lead 状态
     lead_off = lead_data[-1] == 1
 
-    if lead_off:
-        # ---------- LEAD OFF 分支 ----------
-        hr_text.set_text("--")
-        rr_text.set_text("RR Interval: --")
-        roast_text.set_text("[--] 你人呢？")
-        hr_text.set_color((255, 0, 0))
-        ecg_text.set_color((255, 0, 0))
-        roast_text.set_color((255, 0, 0))
-        
-        lead_text.set_text("LEAD OFF")
-        lead_text.set_color((255, 0, 0))
-        return
-
-    # ---------- 正常心电分支 ----------
     rr, hr = rr_hr_calc(timestamps, peaks)
-    color = text_color(hr)
-    rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
-    hr_text.set_text(f"{hr:.0f}")
-    hr_text.set_color(color)
-    ecg_text.set_color(color)
-
     window_mean_hr = 60 / np.mean(rr)
-    roast_text.set_text(f"[Mean HR: {window_mean_hr:0=.0f}] "+hr_roast(window_mean_hr))
-    roast_text.set_color(text_color(window_mean_hr))
+    set_text(rr, hr, lead_off, rr_text, hr_text, ecg_text, roast_text, window_mean_hr)
 
-    lead_text.set_text("NORMAL")
-    lead_text.set_color((0, 255, 0))
+    if lead_off:
+        return
 
     # ---------- 储存RR，计算 HRV ----------
     last_peak_t = float(timestamps[peaks[-1]])
@@ -147,7 +164,7 @@ def update_hr_display(data, lead_data):
             last_rr = last_peak_t - _prev_peak_abs_t
 
             if 0.3 <= last_rr <= 2.0:  # 30~200 bpm
-                # 伪迹通常表现为“突然跳变”，RSA通常是“连续变化”
+                # 伪迹通常表现为“突然跳变”，RSA通常是“连续变化”·
                 if len(rr_buf) >= 1:
                     prev_rr = float(rr_buf[-1])
                     # 阈值放宽，尽量不误杀RSA
@@ -174,7 +191,7 @@ def update_hr_display(data, lead_data):
     if len(rr_arr) >= 30:
         rr_win = rr_arr[-300:]
 
-        # --- 简单鲁棒清洗（不追求完美，主要踢掉离谱值） ---
+        # --- 简单鲁棒清洗 ---
         med = np.median(rr_win)
         mad = np.median(np.abs(rr_win - med))
         if mad > 1e-12:

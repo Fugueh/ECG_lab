@@ -9,6 +9,8 @@ import pyqtgraph as pg
 from configuration import *
 from functions import *
 
+time_window = 7
+
 # ---------- 日志文件 ----------
 formatted_time = time.strftime("%Y-%m-%d_%H%M%S", time.localtime())
 logfile = open("raw_record_%s.csv"%formatted_time, "w")
