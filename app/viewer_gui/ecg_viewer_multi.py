@@ -10,7 +10,7 @@ data_path = '../ecg_data/'
 file_name = 'ecg_log_2025-11-17_130244.csv'
 
 def read_ecg_df(ecg_csv):
-    if ecg_csv[-3] == 'csv':
+    if ecg_csv[-3:] == 'csv':
         df = pd.read_csv(ecg_csv)
     elif ecg_csv[-7:] == 'parquet':
         df = pd.read_parquet(ecg_csv)

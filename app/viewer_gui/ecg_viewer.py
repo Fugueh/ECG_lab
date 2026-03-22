@@ -1,4 +1,4 @@
-import sys
+import sys, argparse, os
 import numpy as np
 from pyqtgraph.Qt import QtCore, QtWidgets
 import pyqtgraph as pg
@@ -8,12 +8,31 @@ from PyQt5 import QtGui
 # ---------- 数据加载 ----------
 data_path = '../ecg_data/'
 file_name = 'ecg_log_2025-11-17_130244.csv'
-df = pd.read_csv(data_path + file_name)   # 你的两列：time, ecg
+
+def read_ecg_df(ecg_csv):
+    if ecg_csv[-3:] == 'csv':
+        df = pd.read_csv(ecg_csv)
+    elif ecg_csv[-7:] == 'parquet':
+        df = pd.read_parquet(ecg_csv)
+    return df
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Captain ECG Viewer")
+    parser.add_argument(
+        "ecg_csv",
+        nargs="?",
+        default=os.path.join(data_path, file_name),
+        help="Path to ECG CSV file (columns: time, ecg)"
+    )
+    return parser.parse_args()
+
+args = parse_args()
+df = read_ecg_df(args.ecg_csv)
 
 time_array = df["time"].values
 ecg_array = df["ecg"].values
 
-window_sec = 30; fs = 50
+window_sec = 10; fs = 250
 window_size = int(window_sec * fs)
 max_start = len(ecg_array) - window_size
 time_array -= time_array[0]
