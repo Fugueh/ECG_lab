@@ -3,9 +3,36 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ecg_lab_core"
+name = "ecg-lab"
 version = "0.1.0"
+description = "ECG time-series processing utilities, monitoring tools, and training pipelines."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+ml = [
+    "neurokit2",
+    "scikit-learn",
+    "torch",
+]
+monitor = [
+    "pyqt5",
+    "pyqtgraph",
+    "pyserial",
+    "rich",
+]
+
+[project.scripts]
+ecg-lab = "ecg_lab.cli:main"
 
 [tool.setuptools]
-# 显式指定你要打包的文件夹名
-packages = ["ecg_core"]
+packages = ["ecg_core", "ecg_lab"]

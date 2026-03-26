@@ -28,6 +28,7 @@ Thumbs.db
 
 # logs
 *.log
+.pytest_cache/
 
 # large raw ECG data
 data/

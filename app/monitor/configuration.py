@@ -1,23 +1,29 @@
-import numpy as np
-import serial, queue
-from collections import deque
+import queue
 import time
+from collections import deque
 
-# ---------- 串口配置 ----------
-fs = 50
-time_window = 10
-WINDOW = time_window * fs
-SERIAL_PORT = "COM3"
-BAUD = 115200 
+import numpy as np
+import serial
 
-#ser = serial.Serial(SERIAL_PORT, BAUD, timeout=1)
-ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0) 
+from ecg_lab.config import get_monitor_settings
+
+
+monitor_settings = get_monitor_settings()
+
+# ---------- Serial configuration ----------
+fs = monitor_settings.fs
+time_window = monitor_settings.time_window
+WINDOW = monitor_settings.window
+SERIAL_PORT = monitor_settings.serial_port
+BAUD = monitor_settings.baud
+
+# ser = serial.Serial(SERIAL_PORT, BAUD, timeout=1)
+ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0)
 data_q = queue.Queue(maxsize=2000)
 
 timestamps = np.linspace(time.time() - time_window, time.time(), WINDOW)
 data = np.zeros(WINDOW)
 lead_data = np.zeros(WINDOW)
 
-rr_buf = deque(maxlen=int(5*60*4))
+rr_buf = deque(maxlen=int(5 * 60 * 4))
 beat_count = 0
-
