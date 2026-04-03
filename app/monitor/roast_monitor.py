@@ -10,6 +10,8 @@ import colorsys
 from configuration import *
 from functions import *
 
+time_window = 10
+
 # ---------- 日志文件 ----------
 formatted_time = time.strftime("%Y-%m-%d_%H%M%S", time.localtime())
 logfile = open("raw_record_%s.csv"%formatted_time, "w")
@@ -259,6 +261,9 @@ def update():
 timer = QtCore.QTimer()
 timer.timeout.connect(update)
 timer.start(4)  # 每 ~4ms 更新一次，适应 200–250Hz 采样
+
+import serial
+ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0)
 
 # ---------- 清理 ----------
 def cleanup():

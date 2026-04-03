@@ -57,6 +57,28 @@ def calc_sdnn_rmssd(rr_array):
 
 
 
+def update_hrv(rr_buf):
+    '''用过去300个rr间隔计算HRV，至少要有30个rr间隔'''
+    rr_arr = np.array(rr_buf, dtype=float)
+    if len(rr_arr) < 30:
+        return None, None
+
+    rr_win = rr_arr[-300:]
+
+    med = np.median(rr_win)
+    mad = np.median(np.abs(rr_win - med))
+    if mad > 1e-12:
+        rr_win = rr_win[np.abs(rr_win - med) <= 3.5 * 1.4826 * mad]
+
+    rr_win = rr_win[(rr_win >= 0.3) & (rr_win <= 2.0)]
+
+    if len(rr_win) < 30:
+        return None, None
+
+    return calc_sdnn_rmssd(rr_win)
+
+
+
 # ---------- 更新函数 ----------
 def read_sample(ser):
     """Read from serial port: ecg,lead_off"""

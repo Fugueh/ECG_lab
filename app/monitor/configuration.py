@@ -1,23 +1,28 @@
-import numpy as np
-import serial, queue
-from collections import deque
+#import queue
 import time
+from collections import deque
+import numpy as np
 
-# ---------- 串口配置 ----------
-fs = 50
-time_window = 10
-WINDOW = time_window * fs
-SERIAL_PORT = "COM3"
-BAUD = 115200 
+from dotenv import load_dotenv
+from ecg_lab.config import get_repo_root, get_monitor_settings
 
-#ser = serial.Serial(SERIAL_PORT, BAUD, timeout=1)
-ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0) 
-data_q = queue.Queue(maxsize=2000)
+env_path = get_repo_root() / ".env" # env at repo root
+load_dotenv(dotenv_path=env_path) # load env variables
+monitor_settings = get_monitor_settings() # get config
 
+# serial and gui configuration
+fs = monitor_settings.fs
+time_window = monitor_settings.time_window
+WINDOW = monitor_settings.window
+SERIAL_PORT = monitor_settings.serial_port
+BAUD = monitor_settings.baud
+
+# data containers
 timestamps = np.linspace(time.time() - time_window, time.time(), WINDOW)
 data = np.zeros(WINDOW)
 lead_data = np.zeros(WINDOW)
 
-rr_buf = deque(maxlen=int(5*60*4))
+# buffer and count
+#data_q = queue.Queue(maxsize=2000)
+rr_buf = deque(maxlen=int(5 * 60 * 4))
 beat_count = 0
-

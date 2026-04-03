@@ -1,0 +1,11 @@
+numpy
+pandas
+pyarrow
+scipy
+neurokit2
+scikit-learn
+torch
+pyqt5
+pyqtgraph
+pyserial
+rich

@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import argparse
+import logging
+import subprocess
+import sys
+from pathlib import Path
+
+
+MONITOR_SCRIPTS = {
+    "250hz": Path("app") / "monitor" / "monitor_250hz.py",
+    "roast": Path("app") / "monitor" / "roast_monitor.py",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="ECG Lab command line tools")
+    parser.add_argument("--log-level", default="INFO", help="Logging level, e.g. INFO or DEBUG")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    csv_parser = subparsers.add_parser("csv2parquet", help="Convert a CSV log file to Parquet")
+    csv_parser.add_argument("csv_file")
+
+    clean_parser = subparsers.add_parser("clean-raw", help="Clean raw ECG records with NeuroKit")
+    clean_parser.add_argument("--sampling-rate", type=int, default=250)
+
+    chunk_parser = subparsers.add_parser("build-chunks", help="Split raw records into fixed windows")
+    chunk_parser.add_argument("--fs", type=int, default=250)
+    chunk_parser.add_argument("--chunk-length-s", type=int, default=10)
+
+    record_parser = subparsers.add_parser("update-record-registry", help="Refresh record registry")
+    record_parser.add_argument("--fs", type=int, default=250)
+    record_parser.add_argument("--chunk-length-s", type=int, default=10)
+
+    subparsers.add_parser("update-chunk-registry", help="Refresh chunk registry from saved chunks")
+    monitor_parser = subparsers.add_parser("monitor", help="Launch the realtime monitor UI")
+    monitor_parser.add_argument(
+        "--variant",
+        choices=sorted(MONITOR_SCRIPTS),
+        default="250hz",
+        help="Monitor variant to launch",
+    )
+    return parser
+
+
+def launch_monitor(variant: str) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_relpath = MONITOR_SCRIPTS[variant]
+    script_path = repo_root / script_relpath
+    if not script_path.exists():
+        raise FileNotFoundError(f"Monitor script not found: {script_path}")
+
+    subprocess.run(
+        [sys.executable, str(script_path.name)],
+        cwd=str(script_path.parent),
+        check=True,
+    )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
+
+    if args.command == "monitor":
+        launch_monitor(args.variant)
+        return
+
+    from .config import get_data_paths
+    from .pipeline import (
+        convert_csv_to_parquet,
+        run_nk_raw_to_clean,
+        run_raw_record_to_chunk,
+        run_update_chunk_registry,
+        run_update_record_registry,
+    )
+
+    paths = get_data_paths()
+
+    if args.command == "csv2parquet":
+        convert_csv_to_parquet(args.csv_file)
+    elif args.command == "clean-raw":
+        run_nk_raw_to_clean(paths, sampling_rate=args.sampling_rate)
+    elif args.command == "build-chunks":
+        run_raw_record_to_chunk(paths, fs=args.fs, chunk_length_s=args.chunk_length_s)
+    elif args.command == "update-record-registry":
+        run_update_record_registry(paths, fs=args.fs, chunk_length_s=args.chunk_length_s)
+    elif args.command == "update-chunk-registry":
+        run_update_chunk_registry(paths)
+    else:
+        parser.error(f"Unknown command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()
