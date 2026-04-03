@@ -13,6 +13,11 @@ __pycache__/
 env/
 venv/
 
+# local environment
+.env
+.env.*
+!.env.example
+
 # OS noise
 .DS_Store
 Thumbs.db

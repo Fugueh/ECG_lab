@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
+import sys
+from pathlib import Path
 
-from .config import get_data_paths
-from .pipeline import (
-    convert_csv_to_parquet,
-    run_nk_raw_to_clean,
-    run_raw_record_to_chunk,
-    run_update_chunk_registry,
-    run_update_record_registry,
-)
+
+MONITOR_SCRIPTS = {
+    "250hz": Path("app") / "monitor" / "monitor_250hz.py",
+    "roast": Path("app") / "monitor" / "roast_monitor.py",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,13 +33,48 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--chunk-length-s", type=int, default=10)
 
     subparsers.add_parser("update-chunk-registry", help="Refresh chunk registry from saved chunks")
+    monitor_parser = subparsers.add_parser("monitor", help="Launch the realtime monitor UI")
+    monitor_parser.add_argument(
+        "--variant",
+        choices=sorted(MONITOR_SCRIPTS),
+        default="250hz",
+        help="Monitor variant to launch",
+    )
     return parser
+
+
+def launch_monitor(variant: str) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_relpath = MONITOR_SCRIPTS[variant]
+    script_path = repo_root / script_relpath
+    if not script_path.exists():
+        raise FileNotFoundError(f"Monitor script not found: {script_path}")
+
+    subprocess.run(
+        [sys.executable, str(script_path.name)],
+        cwd=str(script_path.parent),
+        check=True,
+    )
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
+
+    if args.command == "monitor":
+        launch_monitor(args.variant)
+        return
+
+    from .config import get_data_paths
+    from .pipeline import (
+        convert_csv_to_parquet,
+        run_nk_raw_to_clean,
+        run_raw_record_to_chunk,
+        run_update_chunk_registry,
+        run_update_record_registry,
+    )
+
     paths = get_data_paths()
 
     if args.command == "csv2parquet":
