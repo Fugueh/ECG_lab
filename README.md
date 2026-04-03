@@ -11,15 +11,15 @@ The repository now centers on three areas:
 
 ```text
 ecg_lab/
-©À©¤©¤ app/
-©¦   ©¸©¤©¤ monitor.py
-©À©¤©¤ core/
-©¦   ©À©¤©¤ __init__.py
-©¦   ©¸©¤©¤ rr_hr_hrv.py
-©À©¤©¤ __init__.py
-©À©¤©¤ cli.py
-©À©¤©¤ config.py
-©¸©¤©¤ pipeline.py
+|-- app/
+|   `-- monitor.py
+|-- core/
+|   |-- __init__.py
+|   `-- rr_hr_hrv.py
+|-- __init__.py
+|-- cli.py
+|-- config.py
+`-- pipeline.py
 ```
 
 Other important directories in the repo:
