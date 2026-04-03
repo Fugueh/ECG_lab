@@ -1,8 +1,7 @@
-from pathlib import Path
-
 import pytest
 
 from ecg_lab import cli
+from ecg_lab.app import monitor as monitor_module
 
 
 def test_build_parser_accepts_monitor_defaults():
@@ -23,26 +22,19 @@ def test_build_parser_accepts_monitor_variant():
     assert args.variant == "roast"
 
 
-def test_launch_monitor_runs_script_from_monitor_dir(monkeypatch):
+def test_cli_launch_monitor_dispatches_variant(monkeypatch):
     calls = {}
 
-    def fake_run(cmd, cwd, check):
-        calls["cmd"] = cmd
-        calls["cwd"] = cwd
-        calls["check"] = check
+    def fake_launch(variant):
+        calls["variant"] = variant
 
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "launch_monitor", fake_launch)
 
     cli.launch_monitor("250hz")
 
-    expected_dir = Path(__file__).resolve().parents[1] / "app" / "monitor"
-    assert calls["cmd"][1] == "monitor_250hz.py"
-    assert calls["cwd"] == str(expected_dir)
-    assert calls["check"] is True
+    assert calls["variant"] == "250hz"
 
 
-def test_launch_monitor_raises_if_script_missing(monkeypatch):
-    monkeypatch.setitem(cli.MONITOR_SCRIPTS, "missing", Path("app") / "monitor" / "not_here.py")
-
-    with pytest.raises(FileNotFoundError):
-        cli.launch_monitor("missing")
+def test_monitor_module_rejects_unknown_variant():
+    with pytest.raises(ValueError):
+        monitor_module.launch_monitor("missing")

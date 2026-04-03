@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from ecg_core.rr_hr_hrv import BeatCalc, random_time_slice
+from ecg_lab.core.rr_hr_hrv import BeatCalc, random_time_slice
 
 
 def test_random_time_slice_rejects_short_records():
@@ -29,3 +29,4 @@ def test_beatcalc_estimates_hr_and_hrv():
     assert result.n_beats == len(peak_positions)
     assert np.isclose(result.hr, 60.0, atol=0.5)
     assert np.isclose(result.sdnn, 0.0, atol=1e-6)
+

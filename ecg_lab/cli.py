@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
-import sys
-from pathlib import Path
+
+MONITOR_VARIANTS = ("250hz", "roast")
 
 
-MONITOR_SCRIPTS = {
-    "250hz": Path("app") / "monitor" / "monitor_250hz.py",
-    "roast": Path("app") / "monitor" / "roast_monitor.py",
-}
+def launch_monitor(variant: str) -> None:
+    from ecg_lab.app.monitor import launch_monitor as launch_monitor_app
+
+    launch_monitor_app(variant)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,25 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser = subparsers.add_parser("monitor", help="Launch the realtime monitor UI")
     monitor_parser.add_argument(
         "--variant",
-        choices=sorted(MONITOR_SCRIPTS),
+        choices=sorted(MONITOR_VARIANTS),
         default="250hz",
         help="Monitor variant to launch",
     )
     return parser
-
-
-def launch_monitor(variant: str) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    script_relpath = MONITOR_SCRIPTS[variant]
-    script_path = repo_root / script_relpath
-    if not script_path.exists():
-        raise FileNotFoundError(f"Monitor script not found: {script_path}")
-
-    subprocess.run(
-        [sys.executable, str(script_path.name)],
-        cwd=str(script_path.parent),
-        check=True,
-    )
 
 
 def main() -> None:
