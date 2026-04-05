@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import colorsys
+import os
 import time
 from collections import deque
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +18,7 @@ from scipy.signal import find_peaks
 from ecg_lab.config import get_monitor_settings, get_repo_root
 
 
-MONITOR_VARIANTS = ("250hz", "roast")
+MONITOR_VARIANTS = ("250hz", "roast", "ecgresp")
 
 
 def launch_monitor(variant: str = "250hz") -> None:
@@ -25,6 +27,9 @@ def launch_monitor(variant: str = "250hz") -> None:
         return
     if variant == "roast":
         RoastMonitor().run()
+        return
+    if variant == "ecgresp":
+        ECGRespMonitor().run()
         return
     raise ValueError(f"Unknown monitor variant: {variant}")
 
@@ -433,3 +438,309 @@ class RoastMonitor(BaseMonitor):
         self.hr_text.set_color(roast_color)
         self.ecg_text.set_color(roast_color)
         self.roast_text.set_color(roast_color)
+
+
+class ECGRespRuntime:
+    frame_header = b"\xA5\x5A"
+    frame_tail = b"\x55\xAA"
+    frame_len = 30
+    payload_len = 25
+    packet_type = 0x01
+    samples_per_packet = 5
+    dt_raw = 0.004
+    fs = 250
+
+    def __init__(self):
+        load_dotenv(dotenv_path=get_repo_root() / ".env")
+        self.settings = self._get_ecgresp_settings()
+        now = time.time()
+        self.window = self.fs * self.settings.time_window
+        self.timestamps = np.linspace(now - self.settings.time_window, now, self.window)
+        self.ecg = np.zeros(self.window)
+        self.resp = np.zeros(self.window)
+        self.packet_seq = -1
+        self.last_hr = 0
+        self.last_rr = 0
+        self.last_packet_at = 0.0
+        self._rxbuf = bytearray()
+        self.logfile = None
+        self.serial = None
+        self.total_packets = 0
+        self.total_samples = 0
+        self.dropped_bytes = 0
+        self.bad_tail = 0
+        self.bad_payload_len = 0
+        self.bad_packet_type = 0
+        self.bad_sample_count = 0
+        self.packet_loss_events = 0
+        self.last_packet_debug_at = 0.0
+        self.last_no_packet_warning_at = 0.0
+        self.last_sync_debug_at = 0.0
+
+    def _get_ecgresp_settings(self):
+        settings = get_monitor_settings()
+        serial_port = os.getenv("ECG_LAB_SERIAL_PORT", settings.serial_port or "COM3")
+        baud = 57600
+        time_window = 10
+        return replace(settings, fs=self.fs, serial_port=serial_port, baud=baud, time_window=time_window)
+
+    def _debug(self, message: str) -> None:
+        print(f"[ECGRESP] {message}")
+
+    def _maybe_debug(self, key: str, message: str, interval_s: float = 1.0) -> None:
+        now = time.time()
+        attr = f"_debug_last_{key}"
+        last_at = getattr(self, attr, 0.0)
+        if now - last_at >= interval_s:
+            self._debug(message)
+            setattr(self, attr, now)
+
+    def open_log(self) -> None:
+        formatted_time = time.strftime("%Y-%m-%d_%H%M%S", time.localtime())
+        logfile_path = Path.cwd() / f"raw_record_ecgresp_{formatted_time}.csv"
+        self.logfile = logfile_path.open("w", encoding="utf-8", newline="")
+        self.logfile.write("time,packet_seq,ecg,resp,hr,rr\n")
+        self._debug(f"Logging ECG/RESP CSV to {logfile_path}")
+
+    def open_serial(self) -> None:
+        import serial
+
+        self.serial = serial.Serial()
+        self.serial.port = self.settings.serial_port
+        self.serial.baudrate = self.settings.baud
+        self.serial.timeout = 0
+        self.serial.rtscts = False
+        self.serial.dsrdtr = False
+        try:
+            self.serial.dtr = False
+            self.serial.rts = False
+        except Exception:
+            pass
+        self.serial.open()
+        self._debug(
+            f"Opened serial {self.settings.serial_port}@{self.settings.baud} "
+            f"(protocol: {self.fs} SPS, {self.samples_per_packet} samples/packet, frame_len={self.frame_len})"
+        )
+
+    def close(self) -> None:
+        if self.logfile is not None:
+            self.logfile.close()
+            self.logfile = None
+        if self.serial is not None:
+            self.serial.close()
+            self.serial = None
+
+    def read_packets_nb(self):
+        if self.serial is None:
+            return []
+
+        n = self.serial.in_waiting
+        if n:
+            self._rxbuf += self.serial.read(n)
+
+        packets = []
+        while True:
+            index = self._rxbuf.find(self.frame_header)
+            if index < 0:
+                if len(self._rxbuf) > 1:
+                    self.dropped_bytes += len(self._rxbuf) - 1
+                    self._rxbuf = self._rxbuf[-1:]
+                break
+
+            if index > 0:
+                self.dropped_bytes += index
+                self._maybe_debug("sync_drop", f"Dropped {index} non-frame byte(s) before header while resyncing", 2.0)
+                del self._rxbuf[:index]
+
+            if len(self._rxbuf) < self.frame_len:
+                break
+
+            frame = bytes(self._rxbuf[: self.frame_len])
+            if frame[-2:] != self.frame_tail:
+                self.bad_tail += 1
+                self._maybe_debug("bad_tail", "Discarding candidate frame: bad tail", 1.0)
+                del self._rxbuf[0]
+                continue
+
+            payload_len = frame[2]
+            packet_type = frame[3]
+            packet_seq = frame[4]
+            sample_count = frame[5]
+            if payload_len != self.payload_len:
+                self.bad_payload_len += 1
+                self._maybe_debug("bad_payload", f"Discarding candidate frame: bad payload_len={payload_len}", 1.0)
+                del self._rxbuf[0]
+                continue
+            if packet_type != self.packet_type:
+                self.bad_packet_type += 1
+                self._maybe_debug("bad_type", f"Discarding candidate frame: bad packet_type={packet_type}", 1.0)
+                del self._rxbuf[0]
+                continue
+            if sample_count != self.samples_per_packet:
+                self.bad_sample_count += 1
+                self._maybe_debug("bad_count", f"Discarding candidate frame: bad sample_count={sample_count}", 1.0)
+                del self._rxbuf[0]
+                continue
+
+            samples_blob = frame[6:26]
+            samples = np.frombuffer(samples_blob, dtype="<i2").reshape(self.samples_per_packet, 2).copy()
+            hr = frame[26]
+            rr = frame[27]
+            packets.append((time.time(), packet_seq, samples, hr, rr))
+            del self._rxbuf[: self.frame_len]
+
+        return packets
+
+    def push_sample(self, timestamp: float, ecg_sample: float, resp_sample: float) -> None:
+        self.timestamps[:-1] = self.timestamps[1:]
+        self.timestamps[-1] = timestamp
+        self.ecg[:-1] = self.ecg[1:]
+        self.ecg[-1] = ecg_sample
+        self.resp[:-1] = self.resp[1:]
+        self.resp[-1] = resp_sample
+
+    @staticmethod
+    def ecg_frame_to_display(samples: np.ndarray) -> float:
+        return float(np.median(samples[:, 0]))
+
+    @staticmethod
+    def resp_frame_to_display(samples: np.ndarray) -> float:
+        return float(np.mean(samples[:, 1]))
+
+
+class ECGRespMonitor:
+    ECG_Y_RANGE = (-15, 40)
+
+    def __init__(self):
+        self.runtime = ECGRespRuntime()
+        self.qt_app = None
+        self.window = None
+        self.plot_ecg = None
+        self.plot_resp = None
+        self.curve_ecg = None
+        self.curve_resp = None
+        self.timer = None
+        self.status_text = None
+        self.ecg_text = None
+        self.hr_text = None
+        self.rr_text = None
+        self.info_text = None
+        self.last_packet_text = None
+
+    def setup_ui(self):
+        self.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        self.window = pg.GraphicsLayoutWidget(show=True, title="Captain ECG/RESP Monitor")
+        self.window.resize(1200, 700)
+        self.window.setBackground("k")
+
+        self.plot_ecg = self.window.addPlot(title="ECG")
+        self.curve_ecg = self.plot_ecg.plot(pen=pg.mkPen((0, 255, 0), width=1.2))
+        self.plot_ecg.setXRange(-self.runtime.settings.time_window, 0)
+        self.plot_ecg.setYRange(*self.ECG_Y_RANGE, padding=0)
+        self.plot_ecg.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_ecg.setLabel("left", "ECG")
+        self.plot_ecg.setLabel("bottom", "Time (s)", **{"color": "#AAA", "font-size": "10pt"})
+
+        self.status_text = HUDText(
+            self.plot_ecg,
+            f"ADS1292R 250 SPS | 5 samples/packet | 50 Hz UART | {self.runtime.settings.serial_port}@{self.runtime.settings.baud}",
+            (-self.runtime.settings.time_window, 35),
+            color=(180, 180, 180),
+            anchor=(0, 0),
+            font_size=11,
+        )
+        self.ecg_text = HUDText(self.plot_ecg, "ECG\nbpm", (-self.runtime.settings.time_window+8.1, 37), color=(0, 255, 0), anchor=(1, 0), font_size=20)
+        self.hr_text = HUDText(self.plot_ecg, "--", (-self.runtime.settings.time_window+8.3, 42), color=(0, 255, 0), anchor=(0, 0), font_size=120, bold=True)
+        #self.rr_text = HUDText(self.plot_ecg, "RR: -- rpm", (-2.2, 0), color=(0, 220, 255), anchor=(1, 0), font_size=18, bold=True)
+        self.last_packet_text = HUDText(
+            self.plot_ecg,
+            "Last packet: --",
+            (-self.runtime.settings.time_window, 30),
+            color=(180, 180, 180),
+            anchor=(0, 0),
+            font_size=11,
+        )
+
+        self.window.nextRow()
+        self.plot_resp = self.window.addPlot(title="RESP")
+        self.curve_resp = self.plot_resp.plot(pen=pg.mkPen((0, 220, 255), width=1.2))
+        self.plot_resp.setXRange(-self.runtime.settings.time_window, 0)
+        self.plot_resp.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_resp.setLabel("left", "RESP")
+        self.plot_resp.setLabel("bottom", "Time (s)", **{"color": "#AAA", "font-size": "10pt"})
+        self.info_text = HUDText(self.plot_resp, "Waiting for packets...", (-self.runtime.settings.time_window, 0), color=(180, 180, 180), anchor=(0, 0), font_size=11)
+
+    def update_plot(self):
+        t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
+        self.curve_ecg.setData(t_rel, self.runtime.ecg)
+        self.curve_resp.setData(t_rel, self.runtime.resp)
+
+        resp_valid = self.runtime.resp[np.isfinite(self.runtime.resp)]
+        if resp_valid.size:
+            resp_min = float(np.min(resp_valid))
+            resp_max = float(np.max(resp_valid))
+            resp_pad = max(50.0, (resp_max - resp_min) * 0.15)
+            self.plot_resp.setYRange(resp_min - resp_pad, resp_max + resp_pad, padding=0)
+
+    def update(self):
+        packets = self.runtime.read_packets_nb()
+        if not packets:
+            now = time.time()
+            if not self.runtime.last_packet_at:
+                self.info_text.set_text("Waiting for first valid packet...")
+                self.info_text.set_color((180, 180, 180))
+                if self.last_packet_text is not None:
+                    self.last_packet_text.set_text("Last packet: waiting for stream sync")
+                return
+            if now - self.runtime.last_packet_at > 1.0:
+                self.info_text.set_text("No packets received for >1 s")
+                self.info_text.set_color((255, 200, 0))
+                self.runtime._maybe_debug("no_packets", "No valid ECG/RESP packets received for >1 s", 1.0)
+            return
+
+        for t_recv, packet_seq, samples, hr, rr in packets:
+            if self.runtime.packet_seq >= 0:
+                expected_seq = (self.runtime.packet_seq + 1) % 256
+                if packet_seq != expected_seq:
+                    self.runtime.packet_loss_events += 1
+                    self.runtime._debug(f"Packet sequence gap: expected {expected_seq}, got {packet_seq}")
+            self.runtime.packet_seq = packet_seq
+            self.runtime.last_hr = hr
+            self.runtime.last_rr = rr
+            self.runtime.last_packet_at = t_recv
+            ecg_display = self.runtime.ecg_frame_to_display(samples)
+            resp_display = self.runtime.resp_frame_to_display(samples)
+            self.runtime.push_sample(t_recv, ecg_display, resp_display)
+
+            t0 = t_recv - (self.runtime.samples_per_packet - 1) * self.runtime.dt_raw
+            for i in range(self.runtime.samples_per_packet):
+                ts = t0 + i * self.runtime.dt_raw
+                ecg_sample = int(samples[i, 0])
+                resp_sample = int(samples[i, 1])
+                self.runtime.logfile.write(f"{ts},{packet_seq},{ecg_sample},{resp_sample},{int(hr)},{int(rr)}\n")
+                self.runtime.total_samples += 1
+
+            self.runtime.total_packets += 1
+
+        self.hr_text.set_text(f"{self.runtime.last_hr:.0f}")
+        #self.rr_text.set_text(f"RR: {self.runtime.last_rr:03d} rpm")
+        packet_age_ms = (time.time() - self.runtime.last_packet_at) * 1000
+        self.last_packet_text.set_text(
+            f"Last packet: {self.runtime.last_packet_at:.3f} | Age: {packet_age_ms:.0f} ms"
+        )
+        self.info_text.set_text(
+            f"Seq: {self.runtime.packet_seq} | Packets: {self.runtime.total_packets} | Samples: {self.runtime.total_samples} | Samples shown: {self.runtime.window}"
+        )
+        self.info_text.set_color((180, 180, 180))
+        self.update_plot()
+        self.runtime.logfile.flush()
+
+    def run(self):
+        self.runtime.open_log()
+        self.runtime.open_serial()
+        self.setup_ui()
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update)
+        self.timer.start(10)
+        self.qt_app.aboutToQuit.connect(self.runtime.close)
+        self.qt_app.exec_()

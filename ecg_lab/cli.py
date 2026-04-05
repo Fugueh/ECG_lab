@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-MONITOR_VARIANTS = ("250hz", "roast")
+MONITOR_VARIANTS = ("250hz", "roast", "ecgresp")
 
 
 def launch_monitor(variant: str) -> None:
