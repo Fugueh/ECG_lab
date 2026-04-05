@@ -200,7 +200,7 @@ class MonitorRuntime:
         return float(np.median(samples))
 
 
-class Monitor250Hz:
+class BaseMonitor:
     def __init__(self):
         self.runtime = MonitorRuntime()
         self.qt_app = None
@@ -215,6 +215,78 @@ class Monitor250Hz:
         self.ecg_text = None
         self.lead_text = None
         self.ymax = 860
+
+    def setup_ui(self):
+        raise NotImplementedError
+
+    def apply_display_values(self, rr, hr, lead_off):
+        raise NotImplementedError
+
+    def update_plot(self):
+        if self.curve_ecg is None:
+            return
+        t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
+        self.curve_ecg.setData(t_rel, self.runtime.data)
+
+    def update_hrv_text(self):
+        sdnn, rmssd = self.runtime.update_hrv()
+        if sdnn is not None:
+            self.sdnn_text.set_text(f"SDNN: {sdnn:.0f} ms")
+            self.rmssd_text.set_text(f"RMSSD: {rmssd:.0f} ms")
+
+    def update_hr_display(self):
+        now = time.time()
+        peaks, _ = find_peaks(self.runtime.data, height=350, distance=20)
+        if len(peaks) < 2:
+            return
+
+        lead_off = self.runtime.lead_data[-1] == 1
+        rr, hr = self.runtime.rr_hr_calc(self.runtime.timestamps, peaks)
+        self.apply_display_values(rr, hr, lead_off)
+        if lead_off:
+            return
+
+        last_peak_t = float(self.runtime.timestamps[peaks[-1]])
+        if (self.runtime._prev_peak_abs_t is None) or (last_peak_t > self.runtime._prev_peak_abs_t + 1e-6):
+            self.runtime.maybe_append_rr(last_peak_t, hr)
+
+        if now - self.runtime._last_hrv_ui < 10.0:
+            return
+
+        self.runtime._last_hrv_ui = now
+        self.update_hrv_text()
+
+    def update(self):
+        frames = self.runtime.read_frames_nb()
+        if not frames:
+            return
+
+        for t_recv, _t0_us, lead_off, samples in frames:
+            t0 = t_recv - 5 * self.runtime.dt_raw
+            for i, ecg in enumerate(samples):
+                ts = t0 + i * self.runtime.dt_raw
+                self.runtime.logfile.write(f"{ts},{int(ecg)},{int(lead_off)}\n")
+
+            self.runtime.push_sample(t_recv, self.runtime.frame_to_display(samples), int(lead_off))
+
+        self.update_plot()
+        self.update_hr_display()
+        self.runtime.logfile.flush()
+
+    def run(self):
+        self.runtime.open_log()
+        self.runtime.open_serial()
+        self.setup_ui()
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update)
+        self.timer.start(4)
+        self.qt_app.aboutToQuit.connect(self.runtime.close)
+        self.qt_app.exec_()
+
+
+class Monitor250Hz(BaseMonitor):
+    def __init__(self):
+        super().__init__()
 
     def setup_ui(self):
         self.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -247,24 +319,14 @@ class Monitor250Hz:
             return (255, 255, 0)
         return (248, 47, 0)
 
-    def update_plot(self):
-        if self.curve_ecg is None:
-            return
-        t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
-        self.curve_ecg.setData(t_rel, self.runtime.data)
-
-    def update_hr_display(self):
-        now = time.time()
-        peaks, _ = find_peaks(self.runtime.data, height=350, distance=20)
-        if len(peaks) < 2:
-            return
-
-        lead_off = self.runtime.lead_data[-1] == 1
+    def apply_display_values(self, rr, hr, lead_off):
         if lead_off:
             self.lead_text.set_text("LEAD OFF")
             self.lead_text.set_color((255, 0, 0))
             self.hr_text.set_text("--")
             self.rr_text.set_text("RR Interval: --")
+            self.sdnn_text.set_text("SDNN: -- ms")
+            self.rmssd_text.set_text("RMSSD: -- ms")
             self.hr_text.set_color((255, 0, 0))
             self.ecg_text.set_color((255, 0, 0))
             return
@@ -272,68 +334,17 @@ class Monitor250Hz:
         self.lead_text.set_text("NORMAL")
         self.lead_text.set_color((0, 255, 0))
 
-        last_peak_t = float(self.runtime.timestamps[peaks[-1]])
-        rr, hr = self.runtime.rr_hr_calc(self.runtime.timestamps, peaks)
         color = self.text_color(hr)
         self.rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
         self.hr_text.set_text(f"{hr:.0f}")
         self.hr_text.set_color(color)
         self.ecg_text.set_color(color)
 
-        if (self.runtime._prev_peak_abs_t is None) or (last_peak_t > self.runtime._prev_peak_abs_t + 1e-6):
-            self.runtime.maybe_append_rr(last_peak_t, hr)
 
-        if now - self.runtime._last_hrv_ui >= 10.0:
-            self.runtime._last_hrv_ui = now
-            sdnn, rmssd = self.runtime.update_hrv()
-            if sdnn is not None:
-                self.sdnn_text.set_text(f"SDNN: {sdnn:.0f} ms")
-                self.rmssd_text.set_text(f"RMSSD: {rmssd:.0f} ms")
-
-    def update(self):
-        frames = self.runtime.read_frames_nb()
-        if not frames:
-            return
-
-        for t_recv, _t0_us, lead_off, samples in frames:
-            t0 = t_recv - 5 * self.runtime.dt_raw
-            for i, ecg in enumerate(samples):
-                ts = t0 + i * self.runtime.dt_raw
-                self.runtime.logfile.write(f"{ts},{int(ecg)},{int(lead_off)}\n")
-
-            self.runtime.push_sample(t_recv, self.runtime.frame_to_display(samples), int(lead_off))
-
-        self.update_plot()
-        self.update_hr_display()
-        self.runtime.logfile.flush()
-
-    def run(self):
-        self.runtime.open_log()
-        self.runtime.open_serial()
-        self.setup_ui()
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update)
-        self.timer.start(4)
-        self.qt_app.aboutToQuit.connect(self.runtime.close)
-        self.qt_app.exec_()
-
-
-class RoastMonitor:
+class RoastMonitor(BaseMonitor):
     def __init__(self):
-        self.runtime = MonitorRuntime()
-        self.qt_app = None
-        self.window = None
-        self.plot = None
-        self.timer = None
-        self.curve_ecg = None
+        super().__init__()
         self.roast_text = None
-        self.rr_text = None
-        self.sdnn_text = None
-        self.rmssd_text = None
-        self.hr_text = None
-        self.ecg_text = None
-        self.lead_text = None
-        self.ymax = 860
         self.time_window = 10
 
     def setup_ui(self):
@@ -373,18 +384,19 @@ class RoastMonitor:
     @staticmethod
     def hr_roast(hr):
         if hr < 60:
-            return "Too calm"
-        if hr < 70:
-            return "Still chilling"
-        if hr < 80:
-            return "Steady"
-        if hr < 90:
-            return "Warming up"
-        if hr < 100:
-            return "A little stressed"
-        if hr < 120:
-            return "Pretty anxious"
-        return "That is intense"
+            return "上班时间不许睡觉！"
+        elif hr < 70:
+            return "你在摸鱼？"
+        elif hr < 80:
+            return "稳如老狗"
+        elif hr < 90:
+            return "急了？"
+        elif hr < 100:
+            return "咋还急眼了呢？"
+        elif hr < 120:
+            return "你已急哭"
+        else:
+            return "你没毛病吧？"
 
     @staticmethod
     def hr_roast_color(hr):
@@ -397,7 +409,7 @@ class RoastMonitor:
             return int(r * 255), int(g * 255), int(b * 255)
         return (0, 180, 255)
 
-    def set_text(self, rr, hr, lead_off, window_mean_hr):
+    def apply_display_values(self, rr, hr, lead_off):
         if lead_off:
             self.lead_text.set_text("LEAD OFF")
             self.lead_text.set_color((255, 0, 0))
@@ -413,6 +425,7 @@ class RoastMonitor:
 
         self.lead_text.set_text("NORMAL")
         self.lead_text.set_color((0, 255, 0))
+        window_mean_hr = 60 / np.mean(rr)
         roast_color = self.hr_roast_color(window_mean_hr)
         self.hr_text.set_text(f"{hr:.0f}")
         self.rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
@@ -420,62 +433,3 @@ class RoastMonitor:
         self.hr_text.set_color(roast_color)
         self.ecg_text.set_color(roast_color)
         self.roast_text.set_color(roast_color)
-
-    def update_plot(self):
-        if self.curve_ecg is None:
-            return
-        t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
-        self.curve_ecg.setData(t_rel, self.runtime.data)
-
-    def update_hr_display(self):
-        now = time.time()
-        peaks, _ = find_peaks(self.runtime.data, height=350, distance=20)
-        if len(peaks) < 2:
-            return
-
-        lead_off = self.runtime.lead_data[-1] == 1
-        rr, hr = self.runtime.rr_hr_calc(self.runtime.timestamps, peaks)
-        window_mean_hr = 60 / np.mean(rr)
-        self.set_text(rr, hr, lead_off, window_mean_hr)
-        if lead_off:
-            return
-
-        last_peak_t = float(self.runtime.timestamps[peaks[-1]])
-        if (self.runtime._prev_peak_abs_t is None) or (last_peak_t > self.runtime._prev_peak_abs_t + 1e-6):
-            self.runtime.maybe_append_rr(last_peak_t, hr)
-
-        if now - self.runtime._last_hrv_ui < 10.0:
-            return
-
-        self.runtime._last_hrv_ui = now
-        sdnn, rmssd = self.runtime.update_hrv()
-        if sdnn is not None:
-            self.sdnn_text.set_text(f"SDNN: {sdnn:.0f} ms")
-            self.rmssd_text.set_text(f"RMSSD: {rmssd:.0f} ms")
-
-    def update(self):
-        frames = self.runtime.read_frames_nb()
-        if not frames:
-            return
-
-        for t_recv, _t0_us, lead_off, samples in frames:
-            t0 = t_recv - 5 * self.runtime.dt_raw
-            for i, ecg in enumerate(samples):
-                ts = t0 + i * self.runtime.dt_raw
-                self.runtime.logfile.write(f"{ts},{int(ecg)},{int(lead_off)}\n")
-
-            self.runtime.push_sample(t_recv, self.runtime.frame_to_display(samples), int(lead_off))
-
-        self.update_plot()
-        self.update_hr_display()
-        self.runtime.logfile.flush()
-
-    def run(self):
-        self.runtime.open_log()
-        self.runtime.open_serial()
-        self.setup_ui()
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update)
-        self.timer.start(4)
-        self.qt_app.aboutToQuit.connect(self.runtime.close)
-        self.qt_app.exec_()
