@@ -12,6 +12,12 @@ def launch_monitor(variant: str) -> None:
     launch_monitor_app(variant)
 
 
+def launch_viewer(ecg_file: str) -> None:
+    from ecg_lab.app.viewer import launch_viewer as launch_viewer_app
+
+    launch_viewer_app(ecg_file)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ECG Lab command line tools")
     parser.add_argument("--log-level", default="INFO", help="Logging level, e.g. INFO or DEBUG")
@@ -32,12 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--chunk-length-s", type=int, default=10)
 
     subparsers.add_parser("update-chunk-registry", help="Refresh chunk registry from saved chunks")
+
     monitor_parser = subparsers.add_parser("monitor", help="Launch the realtime monitor UI")
     monitor_parser.add_argument(
         "--variant",
         choices=sorted(MONITOR_VARIANTS),
         default="250hz",
         help="Monitor variant to launch",
+    )
+
+    viewer_parser = subparsers.add_parser("viewer", help="Launch the offline ECG viewer UI")
+    viewer_parser.add_argument(
+        "ecg_file",
+        help="ECG CSV or Parquet file to open",
     )
     return parser
 
@@ -49,6 +62,10 @@ def main() -> None:
 
     if args.command == "monitor":
         launch_monitor(args.variant)
+        return
+
+    if args.command == "viewer":
+        launch_viewer(args.ecg_file)
         return
 
     from .config import get_data_paths

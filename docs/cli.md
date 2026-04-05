@@ -29,6 +29,7 @@ python -m ecg_lab.cli --log-level DEBUG update-chunk-registry
 
 Available subcommands:
 - `monitor`
+- `viewer`
 - `csv2parquet`
 - `clean-raw`
 - `build-chunks`
@@ -51,7 +52,7 @@ Options:
 
 Variants:
 - `250hz`: main monitor window for the framed serial input workflow
-- `roast`: smaller always-on-top monitor with compact status text
+- `roast`: smaller always-on-top variant with compact status text
 
 Related environment variables:
 - `ECG_LAB_SERIAL_PORT`
@@ -63,6 +64,28 @@ Notes:
 - The monitor loads `.env` from the repository root if present.
 - Logs are written as `raw_record_YYYY-MM-DD_HHMMSS.csv` in the current working directory.
 - The monitor depends on the optional `monitor` extras: `pyqt5`, `pyqtgraph`, `pyserial`, and `python-dotenv`.
+
+## `viewer`
+
+Launch the offline ECG viewer UI.
+
+Usage:
+
+```bash
+python -m ecg_lab.cli viewer path/to/raw_record_2026-04-04_233920.parquet
+```
+
+Arguments:
+- `ecg_file`: ECG CSV or Parquet file to open
+
+Behavior:
+- Dispatches through `ecg_lab.app.viewer`
+- Reuses the existing legacy multi-view viewer implementation
+- Does not require editing the legacy script under `app/viewer_gui/`
+
+Notes:
+- The CLI requires a file path and prints usage if it is omitted.
+- The viewer depends on the optional UI stack, especially `pyqt5` and `pyqtgraph`.
 
 ## `csv2parquet`
 
@@ -183,6 +206,12 @@ If the directories do not exist yet, the package creates them when needed.
 ```bash
 python -m ecg_lab.cli monitor
 python -m ecg_lab.cli csv2parquet raw_record_2026-04-04_120000.csv
+```
+
+### Inspect one saved recording
+
+```bash
+python -m ecg_lab.cli viewer path/to/raw_record_2026-04-04_233920.parquet
 ```
 
 ### Prepare records for downstream ML

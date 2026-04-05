@@ -5,14 +5,15 @@ ECG Lab is an ECG signal processing and monitoring project organized around a si
 The repository now centers on three areas:
 - `ecg_lab.core`: ECG signal and HR/HRV related algorithm code
 - `ecg_lab.app`: monitor UI and app-facing runtime logic
-- `ecg_lab.cli`: one command-line entry point for data processing and monitor launch
+- `ecg_lab.cli`: one command-line entry point for data processing, monitor launch, and offline viewer launch
 
 ## Repository Layout
 
 ```text
 ecg_lab/
 |-- app/
-|   `-- monitor.py
+|   |-- monitor.py
+|   `-- viewer.py
 |-- core/
 |   |-- __init__.py
 |   `-- rr_hr_hrv.py
@@ -83,6 +84,12 @@ Launch the mini roast monitor:
 python -m ecg_lab.cli monitor --variant roast
 ```
 
+Launch the offline viewer:
+
+```bash
+python -m ecg_lab.cli viewer path/to/raw_record_2026-04-04_233920.parquet
+```
+
 Convert one CSV log to Parquet:
 
 ```bash
@@ -118,6 +125,15 @@ Legacy script entry points still exist and delegate into the package implementat
 - `app/monitor/monitor_250hz.py`
 - `app/monitor/roast_monitor.py`
 
+## Viewer Notes
+
+The package now exposes an offline viewer launcher at `ecg_lab.app.viewer`.
+
+Current behavior:
+- `python -m ecg_lab.cli viewer <path>` forwards the file path into the legacy multi-view offline viewer
+- the underlying implementation still lives in `app/viewer_gui/ecg_viewer_multi.py`
+- the CLI requires a file path and shows usage if the path is omitted
+
 ## Testing
 
 Run tests with:
@@ -140,6 +156,7 @@ What is already unified:
 - shared CLI through `ecg_lab.cli`
 - core ECG algorithms under `ecg_lab.core`
 - monitor UI under `ecg_lab.app.monitor`
+- viewer launcher under `ecg_lab.app.viewer`
 
 What is still legacy or transitional:
 - `app/viewer_gui/` is still outside `ecg_lab.app`
