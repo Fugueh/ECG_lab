@@ -443,9 +443,9 @@ class RoastMonitor(BaseMonitor):
 class ECGRespRuntime:
     frame_header = b"\xA5\x5A"
     frame_tail = b"\x55\xAA"
-    frame_len = 30
-    payload_len = 25
-    packet_type = 0x01
+    frame_len = 35
+    payload_len = 30
+    packet_type = 0x03
     samples_per_packet = 5
     dt_raw = 0.004
     fs = 250
@@ -479,9 +479,13 @@ class ECGRespRuntime:
 
     def _get_ecgresp_settings(self):
         settings = get_monitor_settings()
-        serial_port = os.getenv("ECG_LAB_SERIAL_PORT", settings.serial_port or "COM3")
+        serial_port = os.getenv("ECG_LAB_SERIAL_PORT", settings.serial_port or "COM10")
+        if isinstance(serial_port, int):
+            serial_port = f"COM{serial_port}"
+        elif isinstance(serial_port, str) and serial_port.isdigit():
+            serial_port = f"COM{serial_port}"
         baud = 57600
-        time_window = 10
+        time_window = int(os.getenv("ECG_LAB_TIME_WINDOW", str(settings.time_window)))
         return replace(settings, fs=self.fs, serial_port=serial_port, baud=baud, time_window=time_window)
 
     def _debug(self, message: str) -> None:
@@ -529,6 +533,25 @@ class ECGRespRuntime:
         if self.serial is not None:
             self.serial.close()
             self.serial = None
+
+    @staticmethod
+    def decode_int24_samples(samples_blob: bytes) -> np.ndarray:
+        samples = np.empty((ECGRespRuntime.samples_per_packet, 2), dtype=np.int32)
+        offset = 0
+        for i in range(ECGRespRuntime.samples_per_packet):
+            ecg_raw = samples_blob[offset] | (samples_blob[offset + 1] << 8) | (samples_blob[offset + 2] << 16)
+            if ecg_raw & 0x800000:
+                ecg_raw -= 1 << 24
+            offset += 3
+
+            resp_raw = samples_blob[offset] | (samples_blob[offset + 1] << 8)
+            if resp_raw & 0x8000:
+                resp_raw -= 1 << 16
+            offset += 2
+
+            samples[i, 0] = ecg_raw
+            samples[i, 1] = resp_raw
+        return samples
 
     def read_packets_nb(self):
         if self.serial is None:
@@ -582,10 +605,10 @@ class ECGRespRuntime:
                 del self._rxbuf[0]
                 continue
 
-            samples_blob = frame[6:26]
-            samples = np.frombuffer(samples_blob, dtype="<i2").reshape(self.samples_per_packet, 2).copy()
-            hr = frame[26]
-            rr = frame[27]
+            samples_blob = frame[6:31]
+            samples = self.decode_int24_samples(samples_blob)
+            hr = frame[31]
+            rr = frame[32]
             packets.append((time.time(), packet_seq, samples, hr, rr))
             del self._rxbuf[: self.frame_len]
 
@@ -607,9 +630,12 @@ class ECGRespRuntime:
     def resp_frame_to_display(samples: np.ndarray) -> float:
         return float(np.mean(samples[:, 1]))
 
-
 class ECGRespMonitor:
-    ECG_Y_RANGE = (-15, 40)
+    ECG_Y_RANGE = (-200000, 200000)
+    HUD_LEFT_PAD_RATIO = 0.012
+    HUD_RIGHT_PAD_RATIO = 0.75
+    HUD_TOP_PAD_RATIO = 0.04
+    HUD_LINE_GAP_RATIO = 0.07
 
     def __init__(self):
         self.runtime = ECGRespRuntime()
@@ -644,18 +670,18 @@ class ECGRespMonitor:
         self.status_text = HUDText(
             self.plot_ecg,
             f"ADS1292R 250 SPS | 5 samples/packet | 50 Hz UART | {self.runtime.settings.serial_port}@{self.runtime.settings.baud}",
-            (-self.runtime.settings.time_window, 35),
+            (0, 0),
             color=(180, 180, 180),
             anchor=(0, 0),
             font_size=11,
         )
-        self.ecg_text = HUDText(self.plot_ecg, "ECG\nbpm", (-self.runtime.settings.time_window+8.1, 37), color=(0, 255, 0), anchor=(1, 0), font_size=20)
-        self.hr_text = HUDText(self.plot_ecg, "--", (-self.runtime.settings.time_window+8.3, 42), color=(0, 255, 0), anchor=(0, 0), font_size=120, bold=True)
+        self.ecg_text = HUDText(self.plot_ecg, "ECG\nbpm", (0, 0), color=(0, 255, 0), anchor=(0, 0), font_size=20)
+        self.hr_text = HUDText(self.plot_ecg, "--", (0, 0), color=(0, 255, 0), anchor=(0, 0), font_size=120, bold=True)
         #self.rr_text = HUDText(self.plot_ecg, "RR: -- rpm", (-2.2, 0), color=(0, 220, 255), anchor=(1, 0), font_size=18, bold=True)
         self.last_packet_text = HUDText(
             self.plot_ecg,
             "Last packet: --",
-            (-self.runtime.settings.time_window, 30),
+            (0, 0),
             color=(180, 180, 180),
             anchor=(0, 0),
             font_size=11,
@@ -668,12 +694,48 @@ class ECGRespMonitor:
         self.plot_resp.showGrid(x=True, y=True, alpha=0.3)
         self.plot_resp.setLabel("left", "RESP")
         self.plot_resp.setLabel("bottom", "Time (s)", **{"color": "#AAA", "font-size": "10pt"})
-        self.info_text = HUDText(self.plot_resp, "Waiting for packets...", (-self.runtime.settings.time_window, 0), color=(180, 180, 180), anchor=(0, 0), font_size=11)
+        self.info_text = HUDText(self.plot_resp, "Waiting for packets...", (0, 0), color=(180, 180, 180), anchor=(0, 0), font_size=11)
+
+    def update_hud_positions(self):
+        x_min, x_max = self.plot_ecg.viewRange()[0]
+        y_min, y_max = self.plot_ecg.viewRange()[1]
+        x_span = x_max - x_min
+        y_span = y_max - y_min
+
+        left_x = x_min + x_span * self.HUD_LEFT_PAD_RATIO
+        right_x = x_min + x_span * self.HUD_RIGHT_PAD_RATIO
+        top_y = y_max - y_span * self.HUD_TOP_PAD_RATIO
+        line_gap = y_span * self.HUD_LINE_GAP_RATIO
+
+        if self.status_text is not None:
+            self.status_text.item.setPos(left_x, top_y)
+        if self.last_packet_text is not None:
+            self.last_packet_text.item.setPos(left_x, top_y - line_gap)
+        if self.ecg_text is not None:
+            self.ecg_text.item.setPos(right_x, top_y - 0.5 * line_gap)
+        if self.hr_text is not None:
+            self.hr_text.item.setPos(right_x + x_span * 0.07, top_y + 0.5 * line_gap)
+
+        resp_x_min, resp_x_max = self.plot_resp.viewRange()[0]
+        resp_y_min, resp_y_max = self.plot_resp.viewRange()[1]
+        resp_x_span = resp_x_max - resp_x_min
+        resp_y_span = resp_y_max - resp_y_min
+        resp_left_x = resp_x_min + resp_x_span * self.HUD_LEFT_PAD_RATIO
+        resp_top_y = resp_y_max - resp_y_span * self.HUD_TOP_PAD_RATIO
+        if self.info_text is not None:
+            self.info_text.item.setPos(resp_left_x, resp_top_y)
 
     def update_plot(self):
         t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
         self.curve_ecg.setData(t_rel, self.runtime.ecg)
         self.curve_resp.setData(t_rel, self.runtime.resp)
+
+        ecg_valid = self.runtime.ecg[np.isfinite(self.runtime.ecg)]
+        if ecg_valid.size:
+            ecg_min = float(np.min(ecg_valid))
+            ecg_max = float(np.max(ecg_valid))
+            ecg_pad = max(1000.0, (ecg_max - ecg_min) * 0.15)
+            self.plot_ecg.setYRange(ecg_min - ecg_pad, ecg_max + ecg_pad, padding=0)
 
         resp_valid = self.runtime.resp[np.isfinite(self.runtime.resp)]
         if resp_valid.size:
@@ -681,6 +743,8 @@ class ECGRespMonitor:
             resp_max = float(np.max(resp_valid))
             resp_pad = max(50.0, (resp_max - resp_min) * 0.15)
             self.plot_resp.setYRange(resp_min - resp_pad, resp_max + resp_pad, padding=0)
+
+        self.update_hud_positions()
 
     def update(self):
         packets = self.runtime.read_packets_nb()

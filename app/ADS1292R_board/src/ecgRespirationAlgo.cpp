@@ -7,8 +7,7 @@
 unsigned char Start_Sample_Count_Flag = 0;
 unsigned char first_peak_detect = FALSE ;
 
-unsigned int sample_count = 0 ; /* Variable which will hold the calculated heart rate */
-unsigned int sample_index[MAX_PEAK_TO_SEARCH + 2] ;
+unsigned int sample_count = 0 ; /* Running sample counter used to measure RR intervals */
 
 int QRS_Second_Prev_Sample = 0 ;
 int QRS_Prev_Sample = 0 ;
@@ -209,19 +208,19 @@ void ecg_respiration_algorithm :: QRS_process_buffer(volatile uint8_t *Heart_rat
 
 void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t scaled_result,volatile uint8_t *Heart_rate)
 {
-  /* array to hold the sample indexes S1,S2,S3 etc */
-  static uint16_t s_array_index = 0 ;
   static uint16_t m_array_index = 0 ;
+  static uint16_t last_peak_sample_index = 0 ;
+  static uint16_t rr_interval_history[MAX_PEAK_TO_SEARCH - 1] = {0} ;
+  static uint8_t rr_interval_history_index = 0 ;
+  static uint8_t rr_interval_history_count = 0 ;
   static unsigned char threshold_crossed = FALSE ;
   static uint16_t maxima_search = 0 ;
   static unsigned char peak_detected = FALSE ;
   static uint16_t skip_window = 0 ;
   static long maxima_sum = 0 ;
   static unsigned int peak = 0;
-  static unsigned int sample_sum = 0;
   static unsigned int nopeak = 0;
   uint16_t Max = 0 ;
-  uint16_t HRAvg;
   uint16_t  RRinterval = 0;
   
   if ( TRUE == threshold_crossed  )
@@ -263,17 +262,6 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
     
     if ( m_array_index == MAX_PEAK_TO_SEARCH )
     {
-      sample_sum = sample_sum / (MAX_PEAK_TO_SEARCH - 1);
-      HRAvg =  (uint16_t) sample_sum  ;
-      // Compute HR without checking LeadOffStatus
-      QRS_Heart_Rate = (uint16_t) 60 *  SAMPLING_RATE;
-      QRS_Heart_Rate =  QRS_Heart_Rate / HRAvg ;
-      
-      if (QRS_Heart_Rate > 250)
-      {
-        QRS_Heart_Rate = 250 ;
-      }
-      /* Setting the Current HR value in the ECG_Info structure*/
       maxima_sum =  maxima_sum / MAX_PEAK_TO_SEARCH;
       Max = (int16_t) maxima_sum ;
       /*  calculating the new QRS_Threshold based on the maxima obtained in 4 peaks */
@@ -287,16 +275,8 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
         QRS_Threshold_New = QRS_Threshold_Old;
       }
       
-      sample_count = 0 ;
-      s_array_index = 0 ;
       m_array_index = 0 ;
       maxima_sum = 0 ;
-      sample_index[0] = 0 ;
-      sample_index[1] = 0 ;
-      sample_index[2] = 0 ;
-      sample_index[3] = 0 ;
-      Start_Sample_Count_Flag = 0;
-      sample_sum = 0;
     }
     
   }else if ( scaled_result > QRS_Threshold_New ){
@@ -309,15 +289,39 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
     threshold_crossed = TRUE ;
     peak = scaled_result ;
     nopeak = 0;
-    /*  storing sample index*/
-    sample_index[ s_array_index ] = sample_count ;
-   
-    if ( s_array_index >= 1 )
+    if ( last_peak_sample_index != 0 )
     {
-      sample_sum += sample_index[ s_array_index ] - sample_index[ s_array_index - 1 ] ;
+      uint32_t interval_sum = 0;
+
+      RRinterval = sample_count - last_peak_sample_index;
+      rr_interval_history[rr_interval_history_index] = RRinterval;
+      rr_interval_history_index = (rr_interval_history_index + 1) % (MAX_PEAK_TO_SEARCH - 1);
+
+      if (rr_interval_history_count < (MAX_PEAK_TO_SEARCH - 1))
+      {
+        rr_interval_history_count++;
+      }
+
+      for (uint8_t i = 0; i < rr_interval_history_count; i++)
+      {
+        interval_sum += rr_interval_history[i];
+      }
+
+      if (interval_sum > 0)
+      {
+        uint16_t averaged_interval = (uint16_t)(interval_sum / rr_interval_history_count);
+
+        QRS_Heart_Rate = (uint16_t)(60UL * SAMPLING_RATE);
+        QRS_Heart_Rate = QRS_Heart_Rate / averaged_interval;
+
+        if (QRS_Heart_Rate > 250)
+        {
+          QRS_Heart_Rate = 250 ;
+        }
+      }
     }
-    
-    s_array_index ++ ;
+
+    last_peak_sample_index = sample_count;
   
   }else if (( scaled_result < QRS_Threshold_New ) && (Start_Sample_Count_Flag == 1)){
     sample_count ++ ;
@@ -326,16 +330,13 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
     if (nopeak > (3 * SAMPLING_RATE))
     {
       sample_count = 0 ;
-      s_array_index = 0 ;
       m_array_index = 0 ;
       maxima_sum = 0 ;
-      sample_index[0] = 0 ;
-      sample_index[1] = 0 ;
-      sample_index[2] = 0 ;
-      sample_index[3] = 0 ;
       Start_Sample_Count_Flag = 0;
       peak_detected = FALSE ;
-      sample_sum = 0;
+      last_peak_sample_index = 0;
+      rr_interval_history_index = 0;
+      rr_interval_history_count = 0;
       first_peak_detect = FALSE;
       nopeak = 0;
       QRS_Heart_Rate = 0;
@@ -348,16 +349,13 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
     {
       /* Reset heart rate computation sate variable in case of no peak found in 3 seconds */
       sample_count = 0 ;
-      s_array_index = 0 ;
       m_array_index = 0 ;
       maxima_sum = 0 ;
-      sample_index[0] = 0 ;
-      sample_index[1] = 0 ;
-      sample_index[2] = 0 ;
-      sample_index[3] = 0 ;
       Start_Sample_Count_Flag = 0;
       peak_detected = FALSE ;
-      sample_sum = 0;
+      last_peak_sample_index = 0;
+      rr_interval_history_index = 0;
+      rr_interval_history_count = 0;
       first_peak_detect = FALSE;
       nopeak = 0;
       QRS_Heart_Rate = 0;

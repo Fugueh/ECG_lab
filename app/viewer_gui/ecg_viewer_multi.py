@@ -15,8 +15,8 @@ DEFAULT_FILE_NAME = "ecg_log_2025-11-17_130244.csv"
 WINDOW_SEC = 40
 DETAIL_SEC = 10
 FS = 250
-YMIN = 250
-YMAX = 500
+#YMIN = 250
+#YMAX = 500
 TICK_FONT = QtGui.QFont("Arial", 10)
 LABEL_STYLE = {"font-size": "14pt", "font-family": "Arial"}
 DETAIL_HR_HTML = (
@@ -81,7 +81,7 @@ def format_hr_text(avg_hr):
 
 def style_plot(plot, show_bottom_label=False):
     """Apply consistent axis styling to a plot."""
-    plot.setYRange(YMIN, YMAX)
+    #plot.setYRange(YMIN, YMAX)
     plot.getAxis("left").setStyle(tickFont=TICK_FONT, showValues=False)
     plot.getAxis("bottom").setStyle(tickFont=TICK_FONT)
 

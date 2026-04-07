@@ -42,15 +42,18 @@ const int ADS1292_PWDN_PIN = 4;
 
 #define PACKET_HEADER_1          0xA5
 #define PACKET_HEADER_2          0x5A
-#define PACKET_TYPE_ECG_RESP     0x01
+#define PACKET_TYPE_ECG_RESP_RAW 0x03
 #define PACKET_TAIL_1            0x55
 #define PACKET_TAIL_2            0xAA
 
-#define PACKET_PAYLOAD_LEN       25
-#define PACKET_TOTAL_LEN         30
+#define ECG_RAW_BYTES_PER_SAMPLE 3
+#define RESP_BYTES_PER_SAMPLE    2
+#define PACKET_PAYLOAD_LEN       30
+#define PACKET_TOTAL_LEN         35
 
 int16_t ecgWaveBuff, ecgFilterout;
 int16_t resWaveBuff,respFilterout;
+int32_t ecgRawSample;
 
 ads1292r ADS1292R;
 ecg_respiration_algorithm ECG_RESPIRATION_ALGORITHM;
@@ -74,7 +77,7 @@ RespirationRateEstimator respRateEstimator = {0, 0, 0, 0, 0, 0, {0}, 0, 0, 0, fa
 
 struct EcgRespSampleFrame
 {
-  int16_t ecg;
+  int32_t ecgRaw;
   int16_t resp;
 };
 
@@ -88,18 +91,26 @@ static void writeInt16LE(int16_t value)
   Serial.write((uint8_t)((value >> 8) & 0xFF));
 }
 
+static void writeInt24LE(int32_t value)
+{
+  uint32_t packed = ((uint32_t)value) & 0x00FFFFFFUL;
+  Serial.write((uint8_t)(packed & 0xFF));
+  Serial.write((uint8_t)((packed >> 8) & 0xFF));
+  Serial.write((uint8_t)((packed >> 16) & 0xFF));
+}
+
 void sendBufferedSamplesThroughUART(void)
 {
   Serial.write((uint8_t)PACKET_HEADER_1);
   Serial.write((uint8_t)PACKET_HEADER_2);
   Serial.write((uint8_t)PACKET_PAYLOAD_LEN);
-  Serial.write((uint8_t)PACKET_TYPE_ECG_RESP);
+  Serial.write((uint8_t)PACKET_TYPE_ECG_RESP_RAW);
   Serial.write(packetSequence++);
   Serial.write((uint8_t)SAMPLES_PER_PACKET);
 
   for (uint8_t i = 0; i < SAMPLES_PER_PACKET; ++i)
   {
-    writeInt16LE(samplePacketBuffer[i].ecg);
+    writeInt24LE(samplePacketBuffer[i].ecgRaw);
     writeInt16LE(samplePacketBuffer[i].resp);
   }
 
@@ -109,9 +120,9 @@ void sendBufferedSamplesThroughUART(void)
   Serial.write((uint8_t)PACKET_TAIL_2);
 }
 
-void bufferSampleAndSendWhenReady(int16_t ecgSample, int16_t respSample)
+void bufferSampleAndSendWhenReady(int32_t ecgRaw, int16_t respSample)
 {
-  samplePacketBuffer[samplePacketIndex].ecg = ecgSample;
+  samplePacketBuffer[samplePacketIndex].ecgRaw = ecgRaw;
   samplePacketBuffer[samplePacketIndex].resp = respSample;
   samplePacketIndex++;
 
@@ -224,6 +235,8 @@ void setup()
   // Demo timing summary:
   // ADS1292R samples ECG and RESP simultaneously at 250 SPS.
   // Each UART packet contains 5 consecutive sampling instants.
+  // ECG is transmitted as raw signed 24-bit ADC codes to preserve fidelity.
+  // RESP remains 16-bit for compactness.
   // Each packet therefore covers a 20 ms time window.
   // UART packet rate is 50 Hz.
 }
@@ -235,7 +248,8 @@ void loop()
 
   if (ret == true)
   {
-    ecgWaveBuff = (int16_t)(ecgRespirationValues.sDaqVals[1] >> 8) ;  // ignore the lower 8 bits out of 24bits
+    ecgRawSample = (int32_t)ecgRespirationValues.sDaqVals[1];
+    ecgWaveBuff = (int16_t)(ecgRawSample >> 8) ;  // ignore the lower 8 bits out of 24bits
     resWaveBuff = (int16_t)(ecgRespirationValues.sresultTempResp>>8) ;
 
     if(ecgRespirationValues.leadoffDetected == false)
@@ -255,6 +269,8 @@ void loop()
       globalRespirationRate = 0;
     }
 
-    bufferSampleAndSendWhenReady(ecgFilterout, respFilterout);
+    // Keep the legacy filtered branch on-board for HR estimation,
+    // but send the raw 24-bit ECG samples over UART.
+    bufferSampleAndSendWhenReady(ecgRawSample, respFilterout);
   }
 }

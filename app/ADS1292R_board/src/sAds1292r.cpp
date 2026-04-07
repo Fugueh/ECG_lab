@@ -108,7 +108,9 @@ void ads1292r::ads1292Init(const int chipSelect, const int pwdnPin, const int st
   delay(10);
   ads1292RegWrite(ADS1292_REG_CH2SET, 0b01100000, chipSelect); // Ch 2 enabled, gain 6, connected to electrode in
   delay(10);
-  ads1292RegWrite(ADS1292_REG_RLDSENS, 0b00101100, chipSelect); // RLD settings: fmod/16, RLD enabled, RLD inputs from Ch2 only
+  // Feed both ECG inputs into the internal right-leg-drive loop so the AFE
+  // can cancel more common-mode mains pickup before conversion.
+  ads1292RegWrite(ADS1292_REG_RLDSENS, 0b00101111, chipSelect); // RLD settings: fmod/16, RLD enabled, RLD inputs from Ch1+Ch2
   delay(10);
   ads1292RegWrite(ADS1292_REG_LOFFSENS, 0x00, chipSelect);    // LOFF settings: all disabled
   delay(10);                                                  // Skip register 8, LOFF Settings default
