@@ -12,10 +12,10 @@ def launch_monitor(variant: str) -> None:
     launch_monitor_app(variant)
 
 
-def launch_viewer(ecg_file: str) -> None:
+def launch_viewer(ecg_file: str, column: str = "ecg", meanhr: bool = False) -> None:
     from ecg_lab.app.viewer import launch_viewer as launch_viewer_app
 
-    launch_viewer_app(ecg_file)
+    launch_viewer_app(ecg_file, column=column, meanhr=meanhr)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
         "ecg_file",
         help="ECG CSV or Parquet file to open",
     )
+    viewer_parser.add_argument(
+        "--column",
+        default="ecg",
+        help="ECG data column to plot (default: ecg)",
+    )
+    viewer_parser.add_argument(
+        "--meanhr",
+        action="store_true",
+        help="Show mean heart rate in the detail panel",
+    )
     return parser
 
 
@@ -65,7 +75,7 @@ def main() -> None:
         return
 
     if args.command == "viewer":
-        launch_viewer(args.ecg_file)
+        launch_viewer(args.ecg_file, column=args.column, meanhr=args.meanhr)
         return
 
     from .config import get_data_paths

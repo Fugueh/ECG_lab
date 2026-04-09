@@ -21,7 +21,7 @@ def _load_legacy_viewer_module(script_path: Path):
     return module
 
 
-def launch_viewer(ecg_file: str) -> None:
+def launch_viewer(ecg_file: str, column: str = "ecg", meanhr: bool = False) -> None:
     """Launch the legacy multi-view ECG viewer through the package entry point."""
     script_path = LEGACY_VIEWER_SCRIPT
     if not script_path.exists():
@@ -33,7 +33,9 @@ def launch_viewer(ecg_file: str) -> None:
 
     old_argv = sys.argv[:]
     try:
-        sys.argv = [str(script_path), ecg_file]
+        sys.argv = [str(script_path), ecg_file, "--column", column]
+        if meanhr:
+            sys.argv.append("--meanhr")
         module.main()
     finally:
         sys.argv = old_argv

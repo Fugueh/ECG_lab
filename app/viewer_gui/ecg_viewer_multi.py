@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -41,9 +42,28 @@ def parse_args():
         "ecg_csv",
         nargs="?",
         default=os.path.join(DATA_PATH, DEFAULT_FILE_NAME),
-        help="Path to ECG CSV file (columns: time, ecg)",
+        help="Path to ECG CSV file (must include a time column and an ECG data column)",
+    )
+    parser.add_argument(
+        "--column",
+        default="ecg",
+        help="Name of the ECG data column to plot (default: ecg)",
+    )
+    parser.add_argument(
+        "--meanhr",
+        action="store_true",
+        help="Show mean heart rate in the detail panel",
     )
     return parser.parse_args()
+
+
+def get_signal_columns(df, column):
+    """Resolve required input columns and fail with a clear message when missing."""
+    if "time" not in df.columns:
+        raise KeyError("Missing required column: time")
+    if column not in df.columns:
+        raise KeyError(f"Missing required ECG column: {column}")
+    return df["time"].to_numpy(), df[column].to_numpy()
 
 
 def update_curve(curve, time_array, ecg_array, start_idx, window_size):
@@ -107,9 +127,10 @@ def update_detail_plot(detail_plot, detail_curve, detail_hr_text, time_array, ec
     if len(detail_x) > 1:
         detail_plot.setXRange(detail_x[0], detail_x[-1], padding=0)
 
-    avg_hr = calc_avg_hr(detail_x, detail_y)
-    detail_hr_text.setHtml(DETAIL_HR_HTML.format(text=format_hr_text(avg_hr)))
-    position_text_relative(detail_plot, detail_hr_text)
+    if detail_hr_text is not None:
+        avg_hr = calc_avg_hr(detail_x, detail_y)
+        detail_hr_text.setHtml(DETAIL_HR_HTML.format(text=format_hr_text(avg_hr)))
+        position_text_relative(detail_plot, detail_hr_text)
 
 
 def create_main_window():
@@ -120,7 +141,7 @@ def create_main_window():
     return app
 
 
-def build_plots(win):
+def build_plots(win, show_mean_hr=False):
     """Create four overview plots plus one detail plot."""
     curves = []
 
@@ -135,18 +156,38 @@ def build_plots(win):
     style_plot(detail_plot)
     detail_plot.setLabel("bottom", f"Detail: t0 ~ t0 + {DETAIL_SEC} s", **LABEL_STYLE)
 
-    detail_hr_text = pg.TextItem(anchor=(1, 0), color="k")
-    detail_plot.addItem(detail_hr_text, ignoreBounds=True)
+    detail_hr_text = None
+    if show_mean_hr:
+        detail_hr_text = pg.TextItem(anchor=(1, 0), color="k")
+        detail_plot.addItem(detail_hr_text, ignoreBounds=True)
 
     return curves, detail_plot, detail_curve, detail_hr_text
+
+
+def format_slider_timestamp(raw_time_array, start_idx):
+    """Format the absolute timestamp for the current slider position."""
+    if len(raw_time_array) == 0:
+        return "--"
+
+    clamped_idx = min(max(start_idx, 0), len(raw_time_array) - 1)
+    timestamp = raw_time_array[clamped_idx]
+    try:
+        return datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return str(timestamp)
+
+
+def build_window_title(file_path, column, timestamp_text):
+    """Build the main window title including the current slider timestamp."""
+    return f"Captain ECG Viewer: {file_path} [{column}] | t0: {timestamp_text}"
 
 
 def main():
     args = parse_args()
     df = read_ecg_df(args.ecg_csv)
 
-    time_array = df["time"].to_numpy()
-    ecg_array = df["ecg"].to_numpy()
+    raw_time_array = df["time"].to_numpy()
+    time_array, ecg_array = get_signal_columns(df, args.column)
     time_array = time_array - time_array[0]
 
     window_size = int(WINDOW_SEC * FS)
@@ -158,7 +199,7 @@ def main():
     win = pg.GraphicsLayoutWidget()
     win.setBackground("w")
 
-    curves, detail_plot, detail_curve, detail_hr_text = build_plots(win)
+    curves, detail_plot, detail_curve, detail_hr_text = build_plots(win, show_mean_hr=args.meanhr)
 
     slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
     slider.setMinimum(0)
@@ -180,6 +221,17 @@ def main():
         detail_window_size,
     )
 
+    container = QtWidgets.QWidget()
+
+    def update_window_title(t0):
+        container.setWindowTitle(
+            build_window_title(
+                args.ecg_csv,
+                args.column,
+                format_slider_timestamp(raw_time_array, t0),
+            )
+        )
+
     def on_slider_change(t0):
         """Update all plots when the global start index changes."""
         for index, curve in enumerate(curves):
@@ -195,6 +247,7 @@ def main():
             t0,
             detail_window_size,
         )
+        update_window_title(t0)
 
     slider.valueChanged.connect(on_slider_change)
 
@@ -202,10 +255,9 @@ def main():
     layout.addWidget(win)
     layout.addWidget(slider)
 
-    container = QtWidgets.QWidget()
     container.setLayout(layout)
-    container.setWindowTitle(f"Captain ECG Viewer: {args.ecg_csv}")
     container.setStyleSheet("background-color: white;")
+    update_window_title(0)
     container.show()
 
     sys.exit(app.exec_())

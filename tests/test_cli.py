@@ -37,6 +37,19 @@ def test_build_parser_accepts_viewer_file():
 
     assert args.command == "viewer"
     assert args.ecg_file == "sample.parquet"
+    assert args.ecg_column == "ecg"
+    assert args.meanhr is False
+
+
+def test_build_parser_accepts_viewer_column_override():
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["viewer", "sample.parquet", "--ecg-column", "lead_i", "--meanhr"])
+
+    assert args.command == "viewer"
+    assert args.ecg_file == "sample.parquet"
+    assert args.ecg_column == "lead_i"
+    assert args.meanhr is True
 
 
 def test_cli_launch_monitor_dispatches_variant(monkeypatch):
@@ -55,14 +68,18 @@ def test_cli_launch_monitor_dispatches_variant(monkeypatch):
 def test_cli_launch_viewer_dispatches_file(monkeypatch):
     calls = {}
 
-    def fake_launch(ecg_file):
+    def fake_launch(ecg_file, ecg_column="ecg", meanhr=False):
         calls["ecg_file"] = ecg_file
+        calls["ecg_column"] = ecg_column
+        calls["meanhr"] = meanhr
 
     monkeypatch.setattr(cli, "launch_viewer", fake_launch)
 
-    cli.launch_viewer("sample.parquet")
+    cli.launch_viewer("sample.parquet", ecg_column="lead_i", meanhr=True)
 
     assert calls["ecg_file"] == "sample.parquet"
+    assert calls["ecg_column"] == "lead_i"
+    assert calls["meanhr"] is True
 
 
 def test_monitor_module_rejects_unknown_variant():
@@ -74,4 +91,4 @@ def test_viewer_module_rejects_missing_script(monkeypatch):
     monkeypatch.setattr(viewer_module, "LEGACY_VIEWER_SCRIPT", viewer_module.LEGACY_VIEWER_SCRIPT.parent / "missing.py")
 
     with pytest.raises(FileNotFoundError):
-        viewer_module.launch_viewer("sample.parquet")
+        viewer_module.launch_viewer("sample.parquet", ecg_column="lead_i", meanhr=True)
