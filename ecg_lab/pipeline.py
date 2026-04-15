@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ecg_core.rr_hr_hrv import get_dtime
+from ecg_lab.core.rr_hr_hrv import get_dtime
 
 from .config import DataPaths
 
@@ -286,3 +286,4 @@ def run_update_chunk_registry(paths: DataPaths) -> Path:
     output_path = paths.registry / "chunk_registry.csv"
     chunk_registry.to_csv(output_path, index=False)
     return output_path
+

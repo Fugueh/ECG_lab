@@ -1,70 +1,55 @@
 # ECG Lab
 
-ECG Lab 是一个面向 ECG 时序信号处理的工程化实验仓库，覆盖实时采集、离线清洗、固定窗口切片、指标提取、数据注册表维护和训练脚本。
+ECG Lab is an ECG signal processing and monitoring project organized around a single top-level Python package: `ecg_lab`.
 
-这次整理后的目标不是把它包装成“论文复现仓”，而是让它更接近工业项目应有的形态：
-
-- 统一依赖声明
-- 统一配置入口
-- 统一命令行入口
-- 最小可测试核心模块
-- 减少脚本中的硬编码路径
-
-## What It Solves
-
-项目围绕一条典型的工业时序数据链路展开：
-
-1. 采集连续 ECG 信号
-2. 计算 HR / RR / HRV 等指标
-3. 保存原始日志并转换为 Parquet
-4. 清洗原始记录
-5. 将长记录切成固定长度 chunk
-6. 构建 record / chunk registry
-7. 为后续标注、训练和评估提供统一输入
+The repository now centers on three areas:
+- `ecg_lab.core`: ECG signal and HR/HRV related algorithm code
+- `ecg_lab.app`: monitor UI and app-facing runtime logic
+- `ecg_lab.cli`: one command-line entry point for data processing, monitor launch, and offline viewer launch
 
 ## Repository Layout
 
 ```text
-ECG_lab/
-├─ app/
-│  ├─ monitor/               # 实时采集与监控工具
-│  └─ viewer_gui/            # 离线浏览与复核工具
-├─ ecg_core/                 # RR/HR/HRV 等核心算法
-├─ ecg_lab/                  # 共享配置、CLI、pipeline
-├─ machine_learning/         # 预处理、注册表、训练脚本
-├─ tests/                    # 最小测试集
-├─ requirements.txt
-├─ requirements-dev.txt
-└─ pyproject.toml
+ecg_lab/
+|-- app/
+|   |-- monitor.py
+|   `-- viewer.py
+|-- core/
+|   |-- __init__.py
+|   `-- rr_hr_hrv.py
+|-- __init__.py
+|-- cli.py
+|-- config.py
+`-- pipeline.py
 ```
+
+Other important directories in the repo:
+- `app/monitor/`: legacy wrapper scripts and monitor assets kept for compatibility
+- `app/viewer_gui/`: older viewer utilities that are not yet folded into `ecg_lab.app`
+- `machine_learning/`: preprocessing, registry, and training scripts built on top of `ecg_lab`
+- `tests/`: automated tests for config, pipeline, CLI, and core HR/HRV logic
 
 ## Installation
 
-建议使用 Python 3.10+。
+Python `3.10+` is recommended.
 
-基础安装：
-
-```bash
-pip install -r requirements.txt
-```
-
-开发环境：
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-或者直接按包安装：
+Install the full working set:
 
 ```bash
 pip install -e .[dev,ml,monitor]
 ```
 
+If you only need the core data pipeline and CLI without the monitor UI extras:
+
+```bash
+pip install -e .
+```
+
 ## Configuration
 
-项目现在支持通过环境变量统一配置数据根目录和监控参数。
+The project reads configuration from environment variables, optionally loaded from a repo-root `.env` file.
 
-常用变量：
+Common variables:
 
 ```bash
 ECG_LAB_DATA_ROOT=/path/to/data/250hz
@@ -74,80 +59,110 @@ ECG_LAB_MONITOR_FS=50
 ECG_LAB_TIME_WINDOW=10
 ```
 
-如果没有设置 `ECG_LAB_DATA_ROOT`，代码会优先尝试历史默认路径 `E:/ECG_data/250hz`，否则回退到仓库内的 `data/250hz`。
+Behavior notes:
+- `ECG_LAB_DATA_ROOT` controls where processed records, chunks, and registries are written.
+- If `ECG_LAB_DATA_ROOT` is not set, the code first tries the legacy path `E:/ECG_data/250hz`.
+- If that legacy path does not exist, it falls back to `data/250hz` inside the repository.
 
-## CLI
+## CLI Quick Start
 
-现在可以通过统一命令行入口运行核心数据流程：
+Show all commands:
 
 ```bash
 python -m ecg_lab.cli --help
 ```
 
-示例：
+Launch the main monitor UI:
 
 ```bash
-python -m ecg_lab.cli csv2parquet app/monitor/ecg_log_2026-03-26_010000.csv
+python -m ecg_lab.cli monitor
+```
+
+Launch the mini roast monitor:
+
+```bash
+python -m ecg_lab.cli monitor --variant roast
+```
+
+Launch the offline viewer:
+
+```bash
+python -m ecg_lab.cli viewer path/to/raw_record_2026-04-04_233920.parquet
+```
+
+Convert one CSV log to Parquet:
+
+```bash
+python -m ecg_lab.cli csv2parquet path/to/raw_record_2026-04-04_120000.csv
+```
+
+Run the data pipeline:
+
+```bash
 python -m ecg_lab.cli clean-raw --sampling-rate 250
 python -m ecg_lab.cli build-chunks --fs 250 --chunk-length-s 10
 python -m ecg_lab.cli update-record-registry --fs 250 --chunk-length-s 10
 python -m ecg_lab.cli update-chunk-registry
 ```
 
-安装为包后，也可以使用：
+If installed as a package, you can also use:
 
 ```bash
 ecg-lab --help
 ```
 
-## Backward-Compatible Scripts
+Detailed CLI documentation lives in [docs/cli.md](docs/cli.md).
 
-为了不打断原有使用习惯，这些脚本仍然保留，但内部已经改为走共享配置和 pipeline：
+## Monitor Notes
 
-- `app/monitor/csv2parquet.py`
-- `machine_learning/preprocess/nk_raw2clean.py`
-- `machine_learning/preprocess/raw_record2chunk.py`
-- `machine_learning/registry/update_record_registry.py`
-- `machine_learning/registry/update_chunk_registry.py`
+The monitor implementation now lives in `ecg_lab.app.monitor` and is launched through the CLI or compatibility wrappers.
 
-## Tests
+Current monitor variants:
+- `250hz`: main realtime monitor for framed serial input
+- `roast`: compact always-on-top variant with simplified status text
 
-当前补了最小测试，覆盖：
+Legacy script entry points still exist and delegate into the package implementation:
+- `app/monitor/monitor_250hz.py`
+- `app/monitor/roast_monitor.py`
 
-- 数据路径配置解析
-- record id 提取
-- chunk 切分逻辑
-- chunk 元数据构建
-- RR/HR/HRV 核心逻辑中的基础行为
+## Viewer Notes
 
-运行方式：
+The package now exposes an offline viewer launcher at `ecg_lab.app.viewer`.
+
+Current behavior:
+- `python -m ecg_lab.cli viewer <path>` forwards the file path into the legacy multi-view offline viewer
+- the underlying implementation still lives in `app/viewer_gui/ecg_viewer_multi.py`
+- the CLI requires a file path and shows usage if the path is omitted
+
+## Testing
+
+Run tests with:
 
 ```bash
 pytest -q
 ```
 
-## Industrialization Improvements Included
+If your environment has Windows temp directory permission issues, point pytest temp/cache into the workspace:
 
-本次工业化整理主要包含：
+```bash
+pytest -q --basetemp=tmp/pytest -o cache_dir=tmp/.pytest_cache
+```
 
-- 抽出共享配置模块 `ecg_lab/config.py`
-- 抽出共享 pipeline 模块 `ecg_lab/pipeline.py`
-- 提供统一 CLI `ecg_lab/cli.py`
-- 增加 `pyproject.toml` 依赖和 console script
-- 增加 `requirements.txt` / `requirements-dev.txt`
-- 给关键数据流程补最小测试
-- 修复 `ecg_core/rr_hr_hrv.py` 中会影响导入和测试的坏字符串问题
+## Current Status
 
-## Known Gaps
+What is already unified:
+- one top-level package name: `ecg_lab`
+- shared config through `ecg_lab.config`
+- shared CLI through `ecg_lab.cli`
+- core ECG algorithms under `ecg_lab.core`
+- monitor UI under `ecg_lab.app.monitor`
+- viewer launcher under `ecg_lab.app.viewer`
 
-虽然仓库已经比原来更接近工业项目，但仍有一些值得继续补的地方：
-
-- 训练模块还没有统一成单一入口
-- 监控 GUI 仍然依赖串口和本地桌面环境
-- 数据 schema 还没有完全形式化
-- 缺少 CI、lint、格式化和实验结果报告
-- 还没有在线推理或模型监控层
+What is still legacy or transitional:
+- `app/viewer_gui/` is still outside `ecg_lab.app`
+- some compatibility scripts remain in `app/monitor/`
+- `machine_learning/` scripts still exist as standalone script entry points over shared package code
 
 ## Disclaimer
 
-本项目用于时序信号处理研究、实验验证和工程练习，不构成医疗诊断系统。
+This repository is for ECG signal processing experiments, tooling, and workflow development. It is not a medical diagnosis system.

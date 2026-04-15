@@ -28,6 +28,7 @@ monitor = [
     "pyqt5",
     "pyqtgraph",
     "pyserial",
+    "python-dotenv",
     "rich",
 ]
 
@@ -35,4 +36,7 @@ monitor = [
 ecg-lab = "ecg_lab.cli:main"
 
 [tool.setuptools]
-packages = ["ecg_core", "ecg_lab"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["ecg_lab*"]
