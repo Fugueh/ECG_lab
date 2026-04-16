@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from pyqtgraph.Qt import QtCore, QtWidgets
 from PyQt5 import QtGui
 from PyQt5.QtGui import QFont, QIcon
-from scipy.signal import find_peaks
+from scipy.signal import butter, find_peaks, sosfilt, sosfilt_zi
 
 from ecg_lab.config import get_monitor_settings, get_repo_root
 
@@ -449,6 +449,11 @@ class ECGRespRuntime:
     samples_per_packet = 5
     dt_raw = 0.004
     fs = 250
+    ecg_highpass_hz = 0.5
+    ecg_filter_order = 4
+    resp_lowcut_hz = 0.05
+    resp_highcut_hz = 0.7
+    resp_filter_order = 4
 
     def __init__(self):
         load_dotenv(dotenv_path=get_repo_root() / ".env")
@@ -476,6 +481,22 @@ class ECGRespRuntime:
         self.last_packet_debug_at = 0.0
         self.last_no_packet_warning_at = 0.0
         self.last_sync_debug_at = 0.0
+        self.ecg_sos = butter(
+            self.ecg_filter_order,
+            self.ecg_highpass_hz,
+            btype="highpass",
+            fs=self.fs,
+            output="sos",
+        )
+        self.ecg_filter_state = sosfilt_zi(self.ecg_sos)
+        self.resp_sos = butter(
+            self.resp_filter_order,
+            [self.resp_lowcut_hz, self.resp_highcut_hz],
+            btype="bandpass",
+            fs=self.fs,
+            output="sos",
+        )
+        self.resp_filter_state = sosfilt_zi(self.resp_sos)
 
     def _get_ecgresp_settings(self):
         settings = get_monitor_settings()
@@ -622,13 +643,29 @@ class ECGRespRuntime:
         self.resp[:-1] = self.resp[1:]
         self.resp[-1] = resp_sample
 
-    @staticmethod
-    def ecg_frame_to_display(samples: np.ndarray) -> float:
-        return float(np.median(samples[:, 0]))
+    def filter_ecg_samples(self, samples: np.ndarray) -> np.ndarray:
+        filtered, self.ecg_filter_state = sosfilt(
+            self.ecg_sos,
+            samples.astype(np.float64, copy=False),
+            zi=self.ecg_filter_state,
+        )
+        return filtered
+
+    def filter_resp_samples(self, samples: np.ndarray) -> np.ndarray:
+        filtered, self.resp_filter_state = sosfilt(
+            self.resp_sos,
+            samples.astype(np.float64, copy=False),
+            zi=self.resp_filter_state,
+        )
+        return filtered
 
     @staticmethod
-    def resp_frame_to_display(samples: np.ndarray) -> float:
-        return float(np.mean(samples[:, 1]))
+    def ecg_frame_to_display(filtered_samples: np.ndarray) -> float:
+        return float(np.median(filtered_samples))
+
+    @staticmethod
+    def resp_frame_to_display(filtered_samples: np.ndarray) -> float:
+        return float(np.mean(filtered_samples))
 
 class ECGRespMonitor:
     ECG_Y_RANGE = (-200000, 200000)
@@ -772,8 +809,10 @@ class ECGRespMonitor:
             self.runtime.last_hr = hr
             self.runtime.last_rr = rr
             self.runtime.last_packet_at = t_recv
-            ecg_display = self.runtime.ecg_frame_to_display(samples)
-            resp_display = self.runtime.resp_frame_to_display(samples)
+            filtered_ecg_samples = self.runtime.filter_ecg_samples(samples[:, 0])
+            ecg_display = self.runtime.ecg_frame_to_display(filtered_ecg_samples)
+            filtered_resp_samples = self.runtime.filter_resp_samples(samples[:, 1])
+            resp_display = self.runtime.resp_frame_to_display(filtered_resp_samples)
             self.runtime.push_sample(t_recv, ecg_display, resp_display)
 
             t0 = t_recv - (self.runtime.samples_per_packet - 1) * self.runtime.dt_raw
