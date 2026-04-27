@@ -420,7 +420,7 @@ class RoastMonitor(BaseMonitor):
             self.lead_text.set_color((255, 0, 0))
             self.hr_text.set_text("-?-")
             self.rr_text.set_text("RR Interval: --")
-            self.roast_text.set_text("[-?-] Lead off")
+            self.roast_text.set_text("[-?-] 你人呢？")
             self.sdnn_text.set_text("SDNN: -- ms")
             self.rmssd_text.set_text("RMSSD: -- ms")
             self.hr_text.set_color((255, 0, 0))
@@ -668,7 +668,8 @@ class ECGRespRuntime:
         return float(np.mean(filtered_samples))
 
 class ECGRespMonitor:
-    ECG_Y_RANGE = (-200000, 200000)
+    #ECG_Y_RANGE = (-200000, 200000)
+    ECG_Y_RANGE = (-20000, 80000)
     HUD_LEFT_PAD_RATIO = 0.012
     HUD_RIGHT_PAD_RATIO = 0.75
     HUD_TOP_PAD_RATIO = 0.04
@@ -714,7 +715,7 @@ class ECGRespMonitor:
         )
         self.ecg_text = HUDText(self.plot_ecg, "ECG\nbpm", (0, 0), color=(0, 255, 0), anchor=(0, 0), font_size=20)
         self.hr_text = HUDText(self.plot_ecg, "--", (0, 0), color=(0, 255, 0), anchor=(0, 0), font_size=120, bold=True)
-        #self.rr_text = HUDText(self.plot_ecg, "RR: -- rpm", (-2.2, 0), color=(0, 220, 255), anchor=(1, 0), font_size=18, bold=True)
+        
         self.last_packet_text = HUDText(
             self.plot_ecg,
             "Last packet: --",
@@ -726,12 +727,15 @@ class ECGRespMonitor:
 
         self.window.nextRow()
         self.plot_resp = self.window.addPlot(title="RESP")
-        self.curve_resp = self.plot_resp.plot(pen=pg.mkPen((0, 220, 255), width=1.2))
+        self.curve_resp = self.plot_resp.plot(pen=pg.mkPen((255, 255, 0), width=1.2))
         self.plot_resp.setXRange(-self.runtime.settings.time_window, 0)
         self.plot_resp.showGrid(x=True, y=True, alpha=0.3)
         self.plot_resp.setLabel("left", "RESP")
         self.plot_resp.setLabel("bottom", "Time (s)", **{"color": "#AAA", "font-size": "10pt"})
         self.info_text = HUDText(self.plot_resp, "Waiting for packets...", (0, 0), color=(180, 180, 180), anchor=(0, 0), font_size=11)
+
+        self.resp_text = HUDText(self.plot_resp, "RESP\nrpm", (0, 0), color=(255, 255, 0), anchor=(0, 0), font_size=20, bold=True)
+        self.rr_text = HUDText(self.plot_resp, "--", (0, 0), color=(255, 255, 0), anchor=(0, 0), font_size=120, bold=True)
 
     def update_hud_positions(self):
         x_min, x_max = self.plot_ecg.viewRange()[0]
@@ -758,22 +762,29 @@ class ECGRespMonitor:
         resp_x_span = resp_x_max - resp_x_min
         resp_y_span = resp_y_max - resp_y_min
         resp_left_x = resp_x_min + resp_x_span * self.HUD_LEFT_PAD_RATIO
+        resp_right_x = resp_x_min + resp_x_span * self.HUD_RIGHT_PAD_RATIO
         resp_top_y = resp_y_max - resp_y_span * self.HUD_TOP_PAD_RATIO
+        resp_line_gap = resp_y_span * self.HUD_LINE_GAP_RATIO
         if self.info_text is not None:
             self.info_text.item.setPos(resp_left_x, resp_top_y)
+        if self.resp_text is not None:
+            self.resp_text.item.setPos(resp_right_x, resp_top_y - 0.5 * resp_line_gap)
+        if self.rr_text is not None:
+            self.rr_text.item.setPos(resp_right_x + resp_x_span * 0.07, resp_top_y + 0.5 * resp_line_gap)
 
     def update_plot(self):
         t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
         self.curve_ecg.setData(t_rel, self.runtime.ecg)
         self.curve_resp.setData(t_rel, self.runtime.resp)
 
+        """
         ecg_valid = self.runtime.ecg[np.isfinite(self.runtime.ecg)]
         if ecg_valid.size:
             ecg_min = float(np.min(ecg_valid))
             ecg_max = float(np.max(ecg_valid))
             ecg_pad = max(1000.0, (ecg_max - ecg_min) * 0.15)
             self.plot_ecg.setYRange(ecg_min - ecg_pad, ecg_max + ecg_pad, padding=0)
-
+        """
         resp_valid = self.runtime.resp[np.isfinite(self.runtime.resp)]
         if resp_valid.size:
             resp_min = float(np.min(resp_valid))
@@ -826,7 +837,7 @@ class ECGRespMonitor:
             self.runtime.total_packets += 1
 
         self.hr_text.set_text(f"{self.runtime.last_hr:.0f}")
-        #self.rr_text.set_text(f"RR: {self.runtime.last_rr:03d} rpm")
+        self.rr_text.set_text(f"{self.runtime.last_rr:.0f}" if self.runtime.last_rr > 0 else "--")
         packet_age_ms = (time.time() - self.runtime.last_packet_at) * 1000
         self.last_packet_text.set_text(
             f"Last packet: {self.runtime.last_packet_at:.3f} | Age: {packet_age_ms:.0f} ms"
