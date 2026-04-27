@@ -8,7 +8,6 @@ import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import QtGui
 from pyqtgraph.Qt import QtCore, QtWidgets
-from scipy.signal import find_peaks
 
 
 DATA_PATH = "../ecg_data/"
@@ -16,6 +15,8 @@ DEFAULT_FILE_NAME = "ecg_log_2025-11-17_130244.csv"
 WINDOW_SEC = 40
 DETAIL_SEC = 10
 FS = 250
+DETAIL_YMIN = -3
+DETAIL_YMAX = 8
 #YMIN = 250
 #YMAX = 500
 TICK_FONT = QtGui.QFont("Arial", 10)
@@ -78,9 +79,26 @@ def get_segment(time_array, ecg_array, start_idx, window_size):
     return time_array[start_idx:end_idx], ecg_array[start_idx:end_idx]
 
 
-def calc_avg_hr(timestamps, ecg):
-    """Estimate average heart rate from detected R peaks."""
-    peaks, _ = find_peaks(ecg, height=350, distance=20)
+def clean_ecg_segment(ecg):
+    """Clean an ECG segment with NeuroKit defaults."""
+    try:
+        import neurokit2 as nk
+    except ImportError as exc:
+        raise ImportError("Detail ECG display requires neurokit2 to be installed.") from exc
+
+    return nk.ecg_clean(ecg, sampling_rate=FS)
+
+
+def calc_avg_hr(timestamps, ecg_cleaned):
+    """Estimate average heart rate from NeuroKit-detected R peaks."""
+    try:
+        import neurokit2 as nk
+    except ImportError as exc:
+        raise ImportError("Detail ECG display requires neurokit2 to be installed.") from exc
+
+    _, info = nk.ecg_peaks(ecg_cleaned, sampling_rate=FS)
+
+    peaks = np.asarray(info.get("ECG_R_Peaks", []), dtype=int)
     if len(peaks) < 2:
         return np.nan
 
@@ -109,7 +127,7 @@ def style_plot(plot, show_bottom_label=False):
         plot.setLabel("bottom", "Time (s)", **LABEL_STYLE)
 
 
-def position_text_relative(plot, text_item, x_ratio=0.98, y_ratio=0.04):
+def position_text_relative(plot, text_item, x_ratio=0.98, y_ratio=0):
     """Position a text item by relative location within the current view range."""
     view_box = plot.getViewBox()
     x_min, x_max = view_box.viewRange()[0]
@@ -123,12 +141,18 @@ def position_text_relative(plot, text_item, x_ratio=0.98, y_ratio=0.04):
 def update_detail_plot(detail_plot, detail_curve, detail_hr_text, time_array, ecg_array, start_idx, window_size):
     """Refresh detail waveform and its average heart-rate label."""
     detail_x, detail_y = get_segment(time_array, ecg_array, start_idx, window_size)
-    detail_curve.setData(detail_x, detail_y)
+    detail_y_cleaned = clean_ecg_segment(detail_y)
+    detail_std = np.std(detail_y_cleaned)
+    if np.isclose(detail_std, 0):
+        detail_y_normalized = np.zeros_like(detail_y_cleaned)
+    else:
+        detail_y_normalized = (detail_y_cleaned - np.mean(detail_y_cleaned)) / detail_std
+    detail_curve.setData(detail_x, detail_y_normalized)
     if len(detail_x) > 1:
         detail_plot.setXRange(detail_x[0], detail_x[-1], padding=0)
 
     if detail_hr_text is not None:
-        avg_hr = calc_avg_hr(detail_x, detail_y)
+        avg_hr = calc_avg_hr(detail_x, detail_y_cleaned)
         detail_hr_text.setHtml(DETAIL_HR_HTML.format(text=format_hr_text(avg_hr)))
         position_text_relative(detail_plot, detail_hr_text)
 
@@ -154,6 +178,8 @@ def build_plots(win, show_mean_hr=False):
     detail_plot = win.addPlot(row=4, col=0)
     detail_curve = detail_plot.plot(pen=pg.mkPen((200, 0, 0), width=2))
     style_plot(detail_plot)
+    detail_plot.enableAutoRange(axis="y", enable=False)
+    detail_plot.setYRange(DETAIL_YMIN, DETAIL_YMAX, padding=0)
     detail_plot.setLabel("bottom", f"Detail: t0 ~ t0 + {DETAIL_SEC} s", **LABEL_STYLE)
 
     detail_hr_text = None
