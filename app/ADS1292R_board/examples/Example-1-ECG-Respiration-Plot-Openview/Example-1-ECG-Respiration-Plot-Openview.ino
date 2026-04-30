@@ -38,9 +38,6 @@ const int ADS1292_PWDN_PIN = 4;
 
 #define RESP_MIN_BPM             6
 #define RESP_MAX_BPM             40
-#define RESP_TA_HISTORY_LEN      32
-#define RESP_LOW_TA_FACTOR       0.25f
-#define RESP_MIN_PHASE_RATIO     0.10f
 #define PACKET_HEADER_1          0xA5
 #define PACKET_HEADER_2          0x5A
 #define PACKET_TYPE_ECG_RESP_RAW 0x03
@@ -53,8 +50,8 @@ const int ADS1292_PWDN_PIN = 4;
 #define PACKET_TOTAL_LEN         35
 #define ECG_MWI_WINDOW_SAMPLES   38
 #define ECG_QRS_REFRACTORY_SAMPLES 50
-#define ECG_MIN_RR_SAMPLES       38
-#define ECG_MAX_RR_SAMPLES       300
+#define ECG_MIN_RR_SAMPLES       68
+#define ECG_MAX_RR_SAMPLES       500
 #define ECG_STARTUP_IGNORE_SAMPLES 250
 #define ECG_INIT_WINDOW_END_SAMPLES 500
 
@@ -67,22 +64,13 @@ ecg_respiration_algorithm ECG_RESPIRATION_ALGORITHM;
 
 struct RespirationRateEstimator
 {
-  float previousFilteredSample;
-  float currentPositivePeak;
-  float currentNegativeTrough;
-  float lastCompletedPositivePeak;
-  float lastCompletedNegativeTrough;
-  float tidalAmplitudeHistory[RESP_TA_HISTORY_LEN];
+  float amplitude;
+  float previousPreviousSample;
+  float previousSample;
   uint32_t sampleCounter;
-  uint32_t previousRisingCrossingSample;
-  uint32_t lastFallingCrossingSample;
-  uint8_t tidalAmplitudeCount;
-  uint8_t tidalAmplitudeIndex;
+  uint32_t lastPeakSample;
   uint8_t respirationRate;
-  bool positivePhaseActive;
-  bool negativePhaseActive;
-  bool havePositivePeak;
-  bool haveNegativeTrough;
+  bool armed;
 };
 
 struct BiquadState
@@ -107,9 +95,11 @@ struct HeartRateEstimator
   uint8_t heartRate;
 };
 
-static const float RESP_BANDPASS_SOS[2][6] = {
-  {4.176161019517901575e-04f, 8.352322039035803150e-04f, 4.176161019517901575e-04f, 1.0f, -1.946195450634147006e+00f, 9.479176761701030296e-01f},
-  {1.0f, -2.0f, 1.0f, 1.0f, -1.994838446465836856e+00f, 9.948548513896050549e-01f}
+static const float RESP_BANDPASS_SOS[4][6] = {
+  {4.357743358690126376e-09f, 8.715486717380252751e-09f, 4.357743358690126376e-09f, 1.0f, -1.972519892168127731e+00f, 9.727548804702866869e-01f},
+  {1.0f, 2.0f, 1.0f, 1.0f, -1.988126592172564822e+00f, 9.884243007557537153e-01f},
+  {1.0f, -2.0f, 1.0f, 1.0f, -1.997437921280502460e+00f, 9.974399702362736209e-01f},
+  {1.0f, -2.0f, 1.0f, 1.0f, -1.999139101574710420e+00f, 9.991407330723069968e-01f}
 };
 
 static const float ECG_BANDPASS_SOS[2][6] = {
@@ -117,10 +107,10 @@ static const float ECG_BANDPASS_SOS[2][6] = {
   {1.0f, -2.0f, 1.0f, 1.0f, -1.879593595875511225e+00f, 8.987098877918257012e-01f}
 };
 
-RespirationRateEstimator respRateEstimator = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, {0.0f}, 0, 0, 0, 0, 0, false, false, false, false};
+RespirationRateEstimator respRateEstimator = {0.0f, 0.0f, 0.0f, 0, 0, 0, false};
 HeartRateEstimator heartRateEstimator = {{0.0f}, {0.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0};
 BiquadState ecgBandpassState[2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
-BiquadState respBandpassState[2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+BiquadState respBandpassState[4] = {{0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}};
 
 static float applyEcgBandpassFilter(int16_t rawEcgSample)
 {
@@ -143,7 +133,7 @@ static float applyRespBandpassFilter(int16_t rawRespSample)
 {
   float stageInput = (float)rawRespSample;
 
-  for (uint8_t i = 0; i < 2; ++i)
+  for (uint8_t i = 0; i < 4; ++i)
   {
     const float *sos = RESP_BANDPASS_SOS[i];
     BiquadState *state = &respBandpassState[i];
@@ -186,72 +176,17 @@ static void resetHeartRatePipeline(void)
 
 static void resetRespRatePipeline(void)
 {
-  respRateEstimator.previousFilteredSample = 0.0f;
-  respRateEstimator.currentPositivePeak = 0.0f;
-  respRateEstimator.currentNegativeTrough = 0.0f;
-  respRateEstimator.lastCompletedPositivePeak = 0.0f;
-  respRateEstimator.lastCompletedNegativeTrough = 0.0f;
-  for (uint8_t i = 0; i < RESP_TA_HISTORY_LEN; ++i)
-  {
-    respRateEstimator.tidalAmplitudeHistory[i] = 0.0f;
-  }
+  respRateEstimator.amplitude = 0.0f;
+  respRateEstimator.previousPreviousSample = 0.0f;
+  respRateEstimator.previousSample = 0.0f;
   respRateEstimator.sampleCounter = 0;
-  respRateEstimator.previousRisingCrossingSample = 0;
-  respRateEstimator.lastFallingCrossingSample = 0;
-  respRateEstimator.tidalAmplitudeCount = 0;
-  respRateEstimator.tidalAmplitudeIndex = 0;
+  respRateEstimator.lastPeakSample = 0;
   respRateEstimator.respirationRate = 0;
-  respRateEstimator.positivePhaseActive = false;
-  respRateEstimator.negativePhaseActive = false;
-  respRateEstimator.havePositivePeak = false;
-  respRateEstimator.haveNegativeTrough = false;
-  for (uint8_t i = 0; i < 2; ++i)
+  respRateEstimator.armed = false;
+  for (uint8_t i = 0; i < 4; ++i)
   {
     respBandpassState[i].z1 = 0.0f;
     respBandpassState[i].z2 = 0.0f;
-  }
-}
-
-static float computeRespTidalAmplitudeThreshold(void)
-{
-  float sorted[RESP_TA_HISTORY_LEN];
-  uint8_t count = respRateEstimator.tidalAmplitudeCount;
-  uint8_t i = 0;
-  uint8_t j = 0;
-
-  if (count < 4)
-  {
-    return 0.0f;
-  }
-
-  for (i = 0; i < count; ++i)
-  {
-    sorted[i] = respRateEstimator.tidalAmplitudeHistory[i];
-  }
-
-  for (i = 1; i < count; ++i)
-  {
-    float key = sorted[i];
-    j = i;
-    while (j > 0 && sorted[j - 1] > key)
-    {
-      sorted[j] = sorted[j - 1];
-      --j;
-    }
-    sorted[j] = key;
-  }
-
-  i = (uint8_t)((count - 1) * 0.8f);
-  return sorted[i] * RESP_LOW_TA_FACTOR;
-}
-
-static void appendRespTidalAmplitude(float tidalAmplitude)
-{
-  respRateEstimator.tidalAmplitudeHistory[respRateEstimator.tidalAmplitudeIndex] = tidalAmplitude;
-  respRateEstimator.tidalAmplitudeIndex = (uint8_t)((respRateEstimator.tidalAmplitudeIndex + 1) % RESP_TA_HISTORY_LEN);
-  if (respRateEstimator.tidalAmplitudeCount < RESP_TA_HISTORY_LEN)
-  {
-    respRateEstimator.tidalAmplitudeCount++;
   }
 }
 
@@ -292,6 +227,7 @@ static uint8_t updateHeartRateEstimate(int16_t rawEcgSample)
     state->previousIntegrated >= integrated
   )
   {
+    bool acceptedPeak = false;
     float candidatePeak = state->previousIntegrated;
     uint32_t peakSample = state->sampleCounter - 1;
 
@@ -324,10 +260,21 @@ static uint8_t updateHeartRateEstimate(int16_t rawEcgSample)
         state->threshold = state->noisePeak + 0.25f * (state->signalPeak - state->noisePeak);
       }
 
-      if (
+      acceptedPeak = (
         candidatePeak > state->threshold &&
         (state->lastQrsSample == 0 || (peakSample - state->lastQrsSample) >= ECG_QRS_REFRACTORY_SAMPLES)
-      )
+      );
+
+      if (acceptedPeak && state->lastQrsSample != 0)
+      {
+        uint32_t rrSamples = peakSample - state->lastQrsSample;
+        if (rrSamples < ECG_MIN_RR_SAMPLES)
+        {
+          acceptedPeak = false;
+        }
+      }
+
+      if (acceptedPeak)
       {
         state->signalPeak = 0.125f * candidatePeak + 0.875f * state->signalPeak;
 
@@ -353,8 +300,8 @@ static uint8_t updateHeartRateEstimate(int16_t rawEcgSample)
 
   if (state->lastQrsSample != 0 && (state->sampleCounter - state->lastQrsSample) > ECG_MAX_RR_SAMPLES)
   {
-    state->heartRate = 0;
-    state->lastQrsSample = 0;
+    resetHeartRatePipeline();
+    return 0;
   }
 
   state->previousPreviousIntegrated = state->previousIntegrated;
@@ -425,89 +372,59 @@ static uint8_t updateRespirationRateEstimate(float filteredRespSample)
   RespirationRateEstimator *state = &respRateEstimator;
   const uint16_t minBreathIntervalSamples = (DEMO_SAMPLE_RATE_HZ * 60UL) / RESP_MAX_BPM;
   const uint16_t maxBreathIntervalSamples = (DEMO_SAMPLE_RATE_HZ * 60UL) / RESP_MIN_BPM;
-  bool risingCrossing = false;
-  bool fallingCrossing = false;
 
   state->sampleCounter++;
-
-  risingCrossing = (state->previousFilteredSample <= 0.0f && filteredRespSample > 0.0f);
-  fallingCrossing = (state->previousFilteredSample >= 0.0f && filteredRespSample < 0.0f);
-
-  if (filteredRespSample >= 0.0f)
   {
-    if (!state->positivePhaseActive)
-    {
-      state->positivePhaseActive = true;
-      state->currentPositivePeak = filteredRespSample;
-    }
-    else if (filteredRespSample > state->currentPositivePeak)
-    {
-      state->currentPositivePeak = filteredRespSample;
-    }
-    state->negativePhaseActive = false;
-  }
-  else
-  {
-    if (!state->negativePhaseActive)
-    {
-      state->negativePhaseActive = true;
-      state->currentNegativeTrough = filteredRespSample;
-    }
-    else if (filteredRespSample < state->currentNegativeTrough)
-    {
-      state->currentNegativeTrough = filteredRespSample;
-    }
-    state->positivePhaseActive = false;
+    float absResp = filteredRespSample >= 0.0f ? filteredRespSample : -filteredRespSample;
+    state->amplitude += (absResp - state->amplitude) * 0.015625f;
   }
 
-  if (fallingCrossing)
   {
-    state->lastFallingCrossingSample = state->sampleCounter;
-    state->lastCompletedPositivePeak = state->currentPositivePeak;
-    state->havePositivePeak = true;
-  }
+    float dynamicThreshold = state->amplitude * 0.25f;
+    float releaseThreshold = 0.0f;
 
-  if (risingCrossing)
-  {
-    state->lastCompletedNegativeTrough = state->currentNegativeTrough;
-    state->haveNegativeTrough = true;
+    if (dynamicThreshold < 8.0f)
+    {
+      dynamicThreshold = 8.0f;
+    }
+    releaseThreshold = dynamicThreshold * 0.5f;
+
+    if (filteredRespSample < -releaseThreshold)
+    {
+      state->armed = true;
+    }
 
     if (
-      state->previousRisingCrossingSample != 0 &&
-      state->lastFallingCrossingSample > state->previousRisingCrossingSample &&
-      state->havePositivePeak &&
-      state->haveNegativeTrough
+      state->armed &&
+      state->previousSample >= dynamicThreshold &&
+      state->previousPreviousSample < state->previousSample &&
+      state->previousSample >= filteredRespSample
     )
     {
-      uint32_t cycleSamples = state->sampleCounter - state->previousRisingCrossingSample;
-      uint32_t inspiratorySamples = state->lastFallingCrossingSample - state->previousRisingCrossingSample;
-      uint32_t expiratorySamples = state->sampleCounter - state->lastFallingCrossingSample;
-      uint32_t minPhaseSamples = (uint32_t)(cycleSamples * RESP_MIN_PHASE_RATIO);
-      float tidalAmplitude = state->lastCompletedPositivePeak - state->lastCompletedNegativeTrough;
-      float lowTaThreshold = computeRespTidalAmplitudeThreshold();
+      uint32_t peakSample = state->sampleCounter - 1;
 
-      if (
-        cycleSamples >= minBreathIntervalSamples &&
-        cycleSamples <= maxBreathIntervalSamples &&
-        inspiratorySamples >= minPhaseSamples &&
-        expiratorySamples >= minPhaseSamples &&
-        tidalAmplitude > lowTaThreshold
-      )
+      if (state->lastPeakSample != 0)
       {
-        state->respirationRate = (uint8_t)((60UL * DEMO_SAMPLE_RATE_HZ) / cycleSamples);
-        appendRespTidalAmplitude(tidalAmplitude);
-      }
-    }
+        uint32_t intervalSamples = peakSample - state->lastPeakSample;
 
-    state->previousRisingCrossingSample = state->sampleCounter;
+        if (intervalSamples >= minBreathIntervalSamples && intervalSamples <= maxBreathIntervalSamples)
+        {
+          state->respirationRate = (uint8_t)((60UL * DEMO_SAMPLE_RATE_HZ) / intervalSamples);
+        }
+      }
+
+      state->lastPeakSample = peakSample;
+      state->armed = false;
+    }
   }
 
-  if (state->previousRisingCrossingSample != 0 && (state->sampleCounter - state->previousRisingCrossingSample) > (DEMO_SAMPLE_RATE_HZ * 12UL))
+  if (state->lastPeakSample != 0 && (state->sampleCounter - state->lastPeakSample) > (DEMO_SAMPLE_RATE_HZ * 12UL))
   {
     state->respirationRate = 0;
   }
 
-  state->previousFilteredSample = filteredRespSample;
+  state->previousPreviousSample = state->previousSample;
+  state->previousSample = filteredRespSample;
   return state->respirationRate;
 }
 
