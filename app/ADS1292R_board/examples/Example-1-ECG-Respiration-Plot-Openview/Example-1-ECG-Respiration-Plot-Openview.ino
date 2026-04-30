@@ -38,8 +38,6 @@ const int ADS1292_PWDN_PIN = 4;
 
 #define RESP_MIN_BPM             6
 #define RESP_MAX_BPM             40
-#define RESP_INTERVAL_BUFFER_LEN 4
-
 #define PACKET_HEADER_1          0xA5
 #define PACKET_HEADER_2          0x5A
 #define PACKET_TYPE_ECG_RESP_RAW 0x03
@@ -50,6 +48,12 @@ const int ADS1292_PWDN_PIN = 4;
 #define RESP_BYTES_PER_SAMPLE    2
 #define PACKET_PAYLOAD_LEN       30
 #define PACKET_TOTAL_LEN         35
+#define ECG_MWI_WINDOW_SAMPLES   38
+#define ECG_QRS_REFRACTORY_SAMPLES 50
+#define ECG_MIN_RR_SAMPLES       68
+#define ECG_MAX_RR_SAMPLES       500
+#define ECG_STARTUP_IGNORE_SAMPLES 250
+#define ECG_INIT_WINDOW_END_SAMPLES 500
 
 int16_t ecgWaveBuff, ecgFilterout;
 int16_t resWaveBuff,respFilterout;
@@ -60,20 +64,250 @@ ecg_respiration_algorithm ECG_RESPIRATION_ALGORITHM;
 
 struct RespirationRateEstimator
 {
-  int32_t baseline;
-  int32_t smooth;
-  int32_t amplitude;
-  int16_t previousCentered;
+  float amplitude;
+  float previousPreviousSample;
+  float previousSample;
   uint32_t sampleCounter;
-  uint32_t lastBreathSample;
-  uint16_t breathIntervals[RESP_INTERVAL_BUFFER_LEN];
-  uint8_t intervalIndex;
-  uint8_t intervalCount;
+  uint32_t lastPeakSample;
   uint8_t respirationRate;
   bool armed;
 };
 
-RespirationRateEstimator respRateEstimator = {0, 0, 0, 0, 0, 0, {0}, 0, 0, 0, false};
+struct BiquadState
+{
+  float z1;
+  float z2;
+};
+
+struct HeartRateEstimator
+{
+  float derivativeHistory[5];
+  float mwiBuffer[ECG_MWI_WINDOW_SAMPLES];
+  float mwiSum;
+  float previousPreviousIntegrated;
+  float previousIntegrated;
+  float signalPeak;
+  float noisePeak;
+  float threshold;
+  float warmupPeak;
+  uint32_t sampleCounter;
+  uint32_t lastQrsSample;
+  uint8_t heartRate;
+};
+
+static const float RESP_BANDPASS_SOS[4][6] = {
+  {4.357743358690126376e-09f, 8.715486717380252751e-09f, 4.357743358690126376e-09f, 1.0f, -1.972519892168127731e+00f, 9.727548804702866869e-01f},
+  {1.0f, 2.0f, 1.0f, 1.0f, -1.988126592172564822e+00f, 9.884243007557537153e-01f},
+  {1.0f, -2.0f, 1.0f, 1.0f, -1.997437921280502460e+00f, 9.974399702362736209e-01f},
+  {1.0f, -2.0f, 1.0f, 1.0f, -1.999139101574710420e+00f, 9.991407330723069968e-01f}
+};
+
+static const float ECG_BANDPASS_SOS[2][6] = {
+  {1.335920002785649305e-02f, 2.671840005571298610e-02f, 1.335920002785649305e-02f, 1.0f, -1.681353856955223547e+00f, 7.798921439604280526e-01f},
+  {1.0f, -2.0f, 1.0f, 1.0f, -1.879593595875511225e+00f, 8.987098877918257012e-01f}
+};
+
+RespirationRateEstimator respRateEstimator = {0.0f, 0.0f, 0.0f, 0, 0, 0, false};
+HeartRateEstimator heartRateEstimator = {{0.0f}, {0.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0};
+BiquadState ecgBandpassState[2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+BiquadState respBandpassState[4] = {{0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}};
+
+static float applyEcgBandpassFilter(int16_t rawEcgSample)
+{
+  float stageInput = (float)rawEcgSample;
+
+  for (uint8_t i = 0; i < 2; ++i)
+  {
+    const float *sos = ECG_BANDPASS_SOS[i];
+    BiquadState *state = &ecgBandpassState[i];
+    float stageOutput = sos[0] * stageInput + state->z1;
+    state->z1 = sos[1] * stageInput - sos[4] * stageOutput + state->z2;
+    state->z2 = sos[2] * stageInput - sos[5] * stageOutput;
+    stageInput = stageOutput;
+  }
+
+  return stageInput;
+}
+
+static float applyRespBandpassFilter(int16_t rawRespSample)
+{
+  float stageInput = (float)rawRespSample;
+
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    const float *sos = RESP_BANDPASS_SOS[i];
+    BiquadState *state = &respBandpassState[i];
+    float stageOutput = sos[0] * stageInput + state->z1;
+    state->z1 = sos[1] * stageInput - sos[4] * stageOutput + state->z2;
+    state->z2 = sos[2] * stageInput - sos[5] * stageOutput;
+    stageInput = stageOutput;
+  }
+
+  return stageInput;
+}
+
+static void resetHeartRatePipeline(void)
+{
+  for (uint8_t i = 0; i < 5; ++i)
+  {
+    heartRateEstimator.derivativeHistory[i] = 0.0f;
+  }
+  for (uint8_t i = 0; i < ECG_MWI_WINDOW_SAMPLES; ++i)
+  {
+    heartRateEstimator.mwiBuffer[i] = 0.0f;
+  }
+  heartRateEstimator.mwiSum = 0.0f;
+  heartRateEstimator.previousPreviousIntegrated = 0.0f;
+  heartRateEstimator.previousIntegrated = 0.0f;
+  heartRateEstimator.signalPeak = 0.0f;
+  heartRateEstimator.noisePeak = 0.0f;
+  heartRateEstimator.threshold = 0.0f;
+  heartRateEstimator.warmupPeak = 0.0f;
+  heartRateEstimator.sampleCounter = 0;
+  heartRateEstimator.lastQrsSample = 0;
+  heartRateEstimator.heartRate = 0;
+
+  for (uint8_t i = 0; i < 2; ++i)
+  {
+    ecgBandpassState[i].z1 = 0.0f;
+    ecgBandpassState[i].z2 = 0.0f;
+  }
+}
+
+static void resetRespRatePipeline(void)
+{
+  respRateEstimator.amplitude = 0.0f;
+  respRateEstimator.previousPreviousSample = 0.0f;
+  respRateEstimator.previousSample = 0.0f;
+  respRateEstimator.sampleCounter = 0;
+  respRateEstimator.lastPeakSample = 0;
+  respRateEstimator.respirationRate = 0;
+  respRateEstimator.armed = false;
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    respBandpassState[i].z1 = 0.0f;
+    respBandpassState[i].z2 = 0.0f;
+  }
+}
+
+static uint8_t updateHeartRateEstimate(int16_t rawEcgSample)
+{
+  HeartRateEstimator *state = &heartRateEstimator;
+  float bandpassed = applyEcgBandpassFilter(rawEcgSample);
+  uint8_t mwiIndex = 0;
+  float derivative = 0.0f;
+  float squared = 0.0f;
+  float integrated = 0.0f;
+
+  state->sampleCounter++;
+
+  for (int8_t i = 4; i > 0; --i)
+  {
+    state->derivativeHistory[i] = state->derivativeHistory[i - 1];
+  }
+  state->derivativeHistory[0] = bandpassed;
+
+  derivative = (
+    2.0f * state->derivativeHistory[0] +
+    state->derivativeHistory[1] -
+    state->derivativeHistory[3] -
+    2.0f * state->derivativeHistory[4]
+  ) * 0.125f;
+  squared = derivative * derivative;
+
+  mwiIndex = (uint8_t)(state->sampleCounter % ECG_MWI_WINDOW_SAMPLES);
+  state->mwiSum -= state->mwiBuffer[mwiIndex];
+  state->mwiBuffer[mwiIndex] = squared;
+  state->mwiSum += squared;
+  integrated = state->mwiSum / ECG_MWI_WINDOW_SAMPLES;
+
+  if (
+    state->sampleCounter > 2 &&
+    state->previousIntegrated > state->previousPreviousIntegrated &&
+    state->previousIntegrated >= integrated
+  )
+  {
+    bool acceptedPeak = false;
+    float candidatePeak = state->previousIntegrated;
+    uint32_t peakSample = state->sampleCounter - 1;
+
+    if (state->sampleCounter <= ECG_STARTUP_IGNORE_SAMPLES)
+    {
+      // Ignore the initial band-pass transient caused by the large ECG DC offset.
+    }
+    else if (state->sampleCounter <= ECG_INIT_WINDOW_END_SAMPLES)
+    {
+      if (candidatePeak > state->warmupPeak)
+      {
+        state->warmupPeak = candidatePeak;
+      }
+    }
+    else
+    {
+      if (state->signalPeak <= 0.0f && state->warmupPeak > 0.0f)
+      {
+        state->signalPeak = state->warmupPeak;
+        state->noisePeak = state->warmupPeak * 0.125f;
+      }
+      else if (state->signalPeak <= 0.0f)
+      {
+        state->signalPeak = candidatePeak;
+        state->noisePeak = candidatePeak * 0.125f;
+      }
+
+      if (state->threshold <= 0.0f)
+      {
+        state->threshold = state->noisePeak + 0.25f * (state->signalPeak - state->noisePeak);
+      }
+
+      acceptedPeak = (
+        candidatePeak > state->threshold &&
+        (state->lastQrsSample == 0 || (peakSample - state->lastQrsSample) >= ECG_QRS_REFRACTORY_SAMPLES)
+      );
+
+      if (acceptedPeak && state->lastQrsSample != 0)
+      {
+        uint32_t rrSamples = peakSample - state->lastQrsSample;
+        if (rrSamples < ECG_MIN_RR_SAMPLES)
+        {
+          acceptedPeak = false;
+        }
+      }
+
+      if (acceptedPeak)
+      {
+        state->signalPeak = 0.125f * candidatePeak + 0.875f * state->signalPeak;
+
+        if (state->lastQrsSample != 0)
+        {
+          uint32_t rrSamples = peakSample - state->lastQrsSample;
+          if (rrSamples >= ECG_MIN_RR_SAMPLES && rrSamples <= ECG_MAX_RR_SAMPLES)
+          {
+            state->heartRate = (uint8_t)((60UL * DEMO_SAMPLE_RATE_HZ) / rrSamples);
+          }
+        }
+
+        state->lastQrsSample = peakSample;
+      }
+      else
+      {
+        state->noisePeak = 0.125f * candidatePeak + 0.875f * state->noisePeak;
+      }
+
+      state->threshold = state->noisePeak + 0.25f * (state->signalPeak - state->noisePeak);
+    }
+  }
+
+  if (state->lastQrsSample != 0 && (state->sampleCounter - state->lastQrsSample) > ECG_MAX_RR_SAMPLES)
+  {
+    resetHeartRatePipeline();
+    return 0;
+  }
+
+  state->previousPreviousIntegrated = state->previousIntegrated;
+  state->previousIntegrated = integrated;
+  return state->heartRate;
+}
 
 struct EcgRespSampleFrame
 {
@@ -133,83 +367,64 @@ void bufferSampleAndSendWhenReady(int32_t ecgRaw, int16_t respSample)
   }
 }
 
-static uint8_t updateRespirationRateEstimate(int16_t rawRespSample)
+static uint8_t updateRespirationRateEstimate(float filteredRespSample)
 {
   RespirationRateEstimator *state = &respRateEstimator;
   const uint16_t minBreathIntervalSamples = (DEMO_SAMPLE_RATE_HZ * 60UL) / RESP_MAX_BPM;
   const uint16_t maxBreathIntervalSamples = (DEMO_SAMPLE_RATE_HZ * 60UL) / RESP_MIN_BPM;
 
   state->sampleCounter++;
-
-  if (state->sampleCounter == 1)
   {
-    state->baseline = rawRespSample;
-    state->smooth = rawRespSample;
+    float absResp = filteredRespSample >= 0.0f ? filteredRespSample : -filteredRespSample;
+    state->amplitude += (absResp - state->amplitude) * 0.015625f;
   }
 
-  // Slow baseline tracker for impedance drift removal.
-  state->baseline += ((int32_t)rawRespSample - state->baseline) >> 8;
-  // Short smoothing to suppress packet-to-packet jitter while keeping the respiratory envelope.
-  state->smooth += ((int32_t)rawRespSample - state->smooth) >> 3;
-
-  int16_t centeredResp = (int16_t)(state->smooth - state->baseline);
-  int32_t absCenteredResp = centeredResp >= 0 ? centeredResp : -centeredResp;
-  state->amplitude += (absCenteredResp - state->amplitude) >> 6;
-
-  int16_t dynamicThreshold = (int16_t)(state->amplitude >> 2);
-  if (dynamicThreshold < 12)
   {
-    dynamicThreshold = 12;
-  }
-  int16_t releaseThreshold = dynamicThreshold >> 1;
+    float dynamicThreshold = state->amplitude * 0.25f;
+    float releaseThreshold = 0.0f;
 
-  if (centeredResp < -releaseThreshold)
-  {
-    state->armed = true;
-  }
-
-  if (state->armed && state->previousCentered < dynamicThreshold && centeredResp >= dynamicThreshold)
-  {
-    if (state->lastBreathSample != 0)
+    if (dynamicThreshold < 8.0f)
     {
-      uint32_t intervalSamples = state->sampleCounter - state->lastBreathSample;
+      dynamicThreshold = 8.0f;
+    }
+    releaseThreshold = dynamicThreshold * 0.5f;
 
-      if (intervalSamples >= minBreathIntervalSamples && intervalSamples <= maxBreathIntervalSamples)
-      {
-        state->breathIntervals[state->intervalIndex] = (uint16_t)intervalSamples;
-        state->intervalIndex = (state->intervalIndex + 1) % RESP_INTERVAL_BUFFER_LEN;
-
-        if (state->intervalCount < RESP_INTERVAL_BUFFER_LEN)
-        {
-          state->intervalCount++;
-        }
-
-        uint32_t intervalSum = 0;
-        for (uint8_t i = 0; i < state->intervalCount; ++i)
-        {
-          intervalSum += state->breathIntervals[i];
-        }
-
-        if (intervalSum > 0)
-        {
-          uint32_t averageInterval = intervalSum / state->intervalCount;
-          state->respirationRate = (uint8_t)((60UL * DEMO_SAMPLE_RATE_HZ) / averageInterval);
-        }
-      }
+    if (filteredRespSample < -releaseThreshold)
+    {
+      state->armed = true;
     }
 
-    state->lastBreathSample = state->sampleCounter;
-    state->armed = false;
+    if (
+      state->armed &&
+      state->previousSample >= dynamicThreshold &&
+      state->previousPreviousSample < state->previousSample &&
+      state->previousSample >= filteredRespSample
+    )
+    {
+      uint32_t peakSample = state->sampleCounter - 1;
+
+      if (state->lastPeakSample != 0)
+      {
+        uint32_t intervalSamples = peakSample - state->lastPeakSample;
+
+        if (intervalSamples >= minBreathIntervalSamples && intervalSamples <= maxBreathIntervalSamples)
+        {
+          state->respirationRate = (uint8_t)((60UL * DEMO_SAMPLE_RATE_HZ) / intervalSamples);
+        }
+      }
+
+      state->lastPeakSample = peakSample;
+      state->armed = false;
+    }
   }
 
-  if (state->lastBreathSample != 0 && (state->sampleCounter - state->lastBreathSample) > (DEMO_SAMPLE_RATE_HZ * 12UL))
+  if (state->lastPeakSample != 0 && (state->sampleCounter - state->lastPeakSample) > (DEMO_SAMPLE_RATE_HZ * 12UL))
   {
     state->respirationRate = 0;
-    state->intervalCount = 0;
-    state->intervalIndex = 0;
   }
 
-  state->previousCentered = centeredResp;
+  state->previousPreviousSample = state->previousSample;
+  state->previousSample = filteredRespSample;
   return state->respirationRate;
 }
 
@@ -248,16 +463,17 @@ void loop()
 
   if (ret == true)
   {
+    float respRateSignal = 0.0f;
     ecgRawSample = (int32_t)ecgRespirationValues.sDaqVals[1];
     ecgWaveBuff = (int16_t)(ecgRawSample >> 8) ;  // ignore the lower 8 bits out of 24bits
     resWaveBuff = (int16_t)(ecgRespirationValues.sresultTempResp>>8) ;
 
     if(ecgRespirationValues.leadoffDetected == false)
     {
-      ECG_RESPIRATION_ALGORITHM.ECG_ProcessCurrSample(&ecgWaveBuff, &ecgFilterout);   // filter out the line noise @40Hz cutoff 161 order
-      ECG_RESPIRATION_ALGORITHM.QRS_Algorithm_Interface(ecgFilterout,&globalHeartRate); // calculate
+      globalHeartRate = updateHeartRateEstimate(ecgWaveBuff);
       respFilterout = resWaveBuff;
-      globalRespirationRate = updateRespirationRateEstimate(resWaveBuff);
+      respRateSignal = applyRespBandpassFilter(resWaveBuff);
+      globalRespirationRate = updateRespirationRateEstimate(respRateSignal);
       // RESP algorithm is kept optional here. Raw RESP samples are packetized to keep sampling continuous and packet parsing simple.
       // respFilterout = ECG_RESPIRATION_ALGORITHM.Resp_ProcessCurrSample(resWaveBuff);
       // ECG_RESPIRATION_ALGORITHM.RESP_Algorithm_Interface(respFilterout,&globalRespirationRate);
@@ -267,6 +483,8 @@ void loop()
       respFilterout = 0;
       globalHeartRate = 0;
       globalRespirationRate = 0;
+      resetHeartRatePipeline();
+      resetRespRatePipeline();
     }
 
     // Keep the legacy filtered branch on-board for HR estimation,

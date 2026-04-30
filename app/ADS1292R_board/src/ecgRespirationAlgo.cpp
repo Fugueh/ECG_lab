@@ -210,9 +210,6 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
 {
   static uint16_t m_array_index = 0 ;
   static uint16_t last_peak_sample_index = 0 ;
-  static uint16_t rr_interval_history[MAX_PEAK_TO_SEARCH - 1] = {0} ;
-  static uint8_t rr_interval_history_index = 0 ;
-  static uint8_t rr_interval_history_count = 0 ;
   static unsigned char threshold_crossed = FALSE ;
   static uint16_t maxima_search = 0 ;
   static unsigned char peak_detected = FALSE ;
@@ -291,28 +288,11 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
     nopeak = 0;
     if ( last_peak_sample_index != 0 )
     {
-      uint32_t interval_sum = 0;
-
       RRinterval = sample_count - last_peak_sample_index;
-      rr_interval_history[rr_interval_history_index] = RRinterval;
-      rr_interval_history_index = (rr_interval_history_index + 1) % (MAX_PEAK_TO_SEARCH - 1);
-
-      if (rr_interval_history_count < (MAX_PEAK_TO_SEARCH - 1))
+      if (RRinterval > 0)
       {
-        rr_interval_history_count++;
-      }
-
-      for (uint8_t i = 0; i < rr_interval_history_count; i++)
-      {
-        interval_sum += rr_interval_history[i];
-      }
-
-      if (interval_sum > 0)
-      {
-        uint16_t averaged_interval = (uint16_t)(interval_sum / rr_interval_history_count);
-
         QRS_Heart_Rate = (uint16_t)(60UL * SAMPLING_RATE);
-        QRS_Heart_Rate = QRS_Heart_Rate / averaged_interval;
+        QRS_Heart_Rate = QRS_Heart_Rate / RRinterval;
 
         if (QRS_Heart_Rate > 250)
         {
@@ -335,8 +315,6 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
       Start_Sample_Count_Flag = 0;
       peak_detected = FALSE ;
       last_peak_sample_index = 0;
-      rr_interval_history_index = 0;
-      rr_interval_history_count = 0;
       first_peak_detect = FALSE;
       nopeak = 0;
       QRS_Heart_Rate = 0;
@@ -354,8 +332,6 @@ void ecg_respiration_algorithm :: QRS_check_sample_crossing_threshold( uint16_t 
       Start_Sample_Count_Flag = 0;
       peak_detected = FALSE ;
       last_peak_sample_index = 0;
-      rr_interval_history_index = 0;
-      rr_interval_history_count = 0;
       first_peak_detect = FALSE;
       nopeak = 0;
       QRS_Heart_Rate = 0;
