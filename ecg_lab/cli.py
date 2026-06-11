@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     csv_parser = subparsers.add_parser("csv2parquet", help="Convert a CSV log file to Parquet")
-    csv_parser.add_argument("csv_file")
+    csv_parser.add_argument("csv_files", nargs="+")
 
     clean_parser = subparsers.add_parser("clean-raw", help="Clean raw ECG records with NeuroKit")
     clean_parser.add_argument("--sampling-rate", type=int, default=250)
@@ -90,7 +90,8 @@ def main() -> None:
     paths = get_data_paths()
 
     if args.command == "csv2parquet":
-        convert_csv_to_parquet(args.csv_file)
+        for csv_file in args.csv_files:
+            convert_csv_to_parquet(csv_file)
     elif args.command == "clean-raw":
         run_nk_raw_to_clean(paths, sampling_rate=args.sampling_rate)
     elif args.command == "build-chunks":
