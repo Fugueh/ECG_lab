@@ -92,3 +92,10 @@ def test_viewer_module_rejects_missing_script(monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         viewer_module.launch_viewer("sample.parquet", ecg_column="lead_i", meanhr=True)
+
+
+def test_build_parser_monitor_save_csv_flag():
+    parser = cli.build_parser()
+
+    assert parser.parse_args(["monitor", "--variant", "roast"]).save_csv is False
+    assert parser.parse_args(["monitor", "--variant", "roast", "--save-csv"]).save_csv is True

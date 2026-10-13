@@ -3,7 +3,6 @@ from __future__ import annotations
 import colorsys
 import os
 import time
-import unicodedata
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
@@ -22,12 +21,15 @@ from ecg_lab.config import get_monitor_settings, get_repo_root
 MONITOR_VARIANTS = ("250hz", "roast", "ecgresp")
 
 
-def launch_monitor(variant: str = "250hz") -> None:
+def launch_monitor(variant: str = "250hz", save_csv: bool = False) -> None:
     if variant == "250hz":
         Monitor250Hz().run()
         return
     if variant == "roast":
-        RoastMonitor().run()
+        # roast 变体的扩展功能（吐槽上下文、信号质量、事件面板）都在 ecg_lab.roast 包里
+        from ecg_lab.roast.monitor import launch_roast_monitor
+
+        launch_roast_monitor(save_csv=save_csv)
         return
     if variant == "ecgresp":
         ECGRespMonitor().run()
@@ -354,8 +356,7 @@ class Monitor250Hz(BaseMonitor):
 
 
 class RoastMonitor(BaseMonitor):
-    print_interval_seconds = 30.0
-    roast_column_width = 12
+    print_interval_seconds = 60.0
 
     def __init__(self):
         super().__init__()
@@ -427,6 +428,9 @@ class RoastMonitor(BaseMonitor):
             return int(r * 255), int(g * 255), int(b * 255)
         return (0, 180, 255)
 
+    def window_mean_hr(self, rr):
+        return 60 / np.mean(rr)
+
     def apply_display_values(self, rr, hr, lead_off):
         if lead_off:
             self.lead_text.set_text("LEAD OFF")
@@ -443,7 +447,7 @@ class RoastMonitor(BaseMonitor):
 
         self.lead_text.set_text("NORMAL")
         self.lead_text.set_color((0, 255, 0))
-        window_mean_hr = 60 / np.mean(rr)
+        window_mean_hr = self.window_mean_hr(rr)
         roast_color = self.hr_roast_color(window_mean_hr)
         self.current_mean_hr = window_mean_hr
         self.current_roast_text = self.hr_roast(window_mean_hr)
@@ -459,18 +463,6 @@ class RoastMonitor(BaseMonitor):
         if value is None:
             return "--"
         return f"{value:.0f}"
-
-    @staticmethod
-    def _display_width(text):
-        width = 0
-        for char in text:
-            width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
-        return width
-
-    @classmethod
-    def _pad_display(cls, text, width):
-        padding = max(0, width - cls._display_width(text))
-        return text + (" " * padding)
 
     @staticmethod
     def _roast_phrase(display_text):
@@ -489,12 +481,12 @@ class RoastMonitor(BaseMonitor):
         display_roast_text = getattr(self.roast_text, "text", self.current_roast_text)
         roast_text = self._roast_phrase(display_roast_text)
         mean_hr = None if getattr(self.hr_text, "text", "--") in {"--", "-?-"} else self.current_mean_hr
-        roast_column = self._pad_display(roast_text, self.roast_column_width)
         print(
-            f"[{timestamp}] {roast_column} : "
-            f"HR {self._metric_text(mean_hr):>3} bpm, "
-            f"SDNN {self._metric_text(sdnn):>3} ms, "
-            f"RMSSD {self._metric_text(rmssd):>3} ms",
+            f"[{timestamp}] "
+            f"HR {self._metric_text(mean_hr)} bpm，"
+            f"SDNN {self._metric_text(sdnn)} ms，"
+            f"RMSSD {self._metric_text(rmssd)} ms，"
+            f"{roast_text}",
             flush=True,
         )
 

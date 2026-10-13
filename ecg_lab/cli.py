@@ -3,13 +3,15 @@ from __future__ import annotations
 import argparse
 import logging
 
+from .roast import cli as roast_cli
+
 MONITOR_VARIANTS = ("250hz", "roast", "ecgresp")
 
 
-def launch_monitor(variant: str) -> None:
+def launch_monitor(variant: str, save_csv: bool = False) -> None:
     from ecg_lab.app.monitor import launch_monitor as launch_monitor_app
 
-    launch_monitor_app(variant)
+    launch_monitor_app(variant, save_csv=save_csv)
 
 
 def launch_viewer(ecg_file: str, column: str = "ecg", meanhr: bool = False) -> None:
@@ -46,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="250hz",
         help="Monitor variant to launch",
     )
+    monitor_parser.add_argument(
+        "--save-csv",
+        action="store_true",
+        help="roast variant only: keep the raw CSV after the window closes (deleted by default)",
+    )
+    roast_cli.register(subparsers)
 
     viewer_parser = subparsers.add_parser("viewer", help="Launch the offline ECG viewer UI")
     viewer_parser.add_argument(
@@ -71,7 +79,10 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
 
     if args.command == "monitor":
-        launch_monitor(args.variant)
+        launch_monitor(args.variant, save_csv=args.save_csv)
+        return
+
+    if roast_cli.handle(args):
         return
 
     if args.command == "viewer":

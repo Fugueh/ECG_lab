@@ -39,6 +39,9 @@ Thumbs.db
 data/
 *.pt
 
+# roast monitor metadata (personal)
+roast_context/
+
 # other
 tmp/
 .vscode/
