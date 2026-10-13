@@ -16,6 +16,13 @@ from .phrases import hrv_roast
 from .signal_quality import describe_quality, score_minute
 
 
+LEAD_OFF_COLOR = (255, 0, 0)
+
+
+def _hex_color(rgb) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
 def launch_roast_monitor(save_csv: bool = False) -> None:
     ContextRoastMonitor(save_csv=save_csv).run()
 
@@ -109,7 +116,10 @@ class ContextRoastMonitor(RoastMonitor):
         self.qt_app.aboutToQuit.connect(lambda: self._quality_pool.shutdown(wait=False))
 
         # 把原有的波形窗口和事件面板装进同一个固定大小的窗口，方便一起拖动
-        self.event_panel = EventPanel(context_provider=self._event_context)
+        self.event_panel = EventPanel(
+            context_provider=self._event_context,
+            hr_color=lambda hr: _hex_color(self.hr_roast_color(hr)),
+        )
         self.container = QtWidgets.QWidget()
         self.container.setWindowTitle(self.window.windowTitle())
         self.container.setWindowFlags(self.container.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
@@ -150,6 +160,10 @@ class ContextRoastMonitor(RoastMonitor):
         if mean_hr is not None:
             context["hr"] = int(round(mean_hr))
             context["roast"] = self.current_roast_text
+            # 和界面上心率数字此刻的颜色一致，事件面板用它给时间戳上色
+            context["color"] = _hex_color(self.hr_roast_color(mean_hr))
+        elif self.runtime.lead_data[-1] == 1:
+            context["color"] = _hex_color(LEAD_OFF_COLOR)
         return context
 
     def maybe_print_status(self):

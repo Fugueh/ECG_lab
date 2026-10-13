@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import time
 from datetime import datetime
 
@@ -17,6 +18,9 @@ from .events import (
 
 BUTTONS_PER_ROW = 4
 HISTORY_ROWS = 5
+# 深色底：时间戳用的是波形上心率数字的亮色，白底上看不清
+HISTORY_BACKGROUND = "#111111"
+HISTORY_TEXT_COLOR = "#b4b4b4"
 PANEL_WIDTH = 600
 
 
@@ -143,10 +147,11 @@ class EventPanel(QtWidgets.QWidget):
     # 按钮增删导致面板高度变化时发出，外层窗口据此重新固定大小
     resized = QtCore.pyqtSignal()
 
-    def __init__(self, context_provider=None, directory=None):
+    def __init__(self, context_provider=None, directory=None, hr_color=None):
         super().__init__()
         self._context_provider = context_provider
         self._directory = directory
+        self._hr_color = hr_color
 
         labels = get_event_buttons(directory)
         # 用过的标签按次数排在前面，没用过的按钮标签垫底
@@ -167,17 +172,24 @@ class EventPanel(QtWidgets.QWidget):
         self.add_button.clicked.connect(self.add_event_button)
         self._button_grid = QtWidgets.QGridLayout()
 
-        self.history = QtWidgets.QListWidget()
+        # 最近几条记录：时间戳一列、正文一列，正文换行时自然缩进到时间戳右边
+        self.history = QtWidgets.QTextBrowser()
         self.history.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.history.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.history.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.history.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.history.setTextElideMode(QtCore.Qt.ElideRight)
-        self.history.setStyleSheet("color: gray;")
-        row_height = self.history.fontMetrics().height() + 4
-        self.history.setFixedHeight(HISTORY_ROWS * row_height + 2 * self.history.frameWidth())
-        for record in load_recent_events(HISTORY_ROWS, directory):
-            self._show_in_history(f"{datetime.fromisoformat(record['ts']):%H:%M:%S} {record['text']}")
+        self.history.setStyleSheet(f"background: {HISTORY_BACKGROUND}; color: {HISTORY_TEXT_COLOR};")
+        # 标准高度正好放下 HISTORY_ROWS 条单行记录；有换行时用滚轮看更早的
+        self.history.setFixedHeight(
+            HISTORY_ROWS * self.history.fontMetrics().lineSpacing()
+            + int(2 * self.history.document().documentMargin())
+            + 2 * self.history.frameWidth()
+        )
+        self._entries = []
+        for record in reversed(load_recent_events(HISTORY_ROWS, directory)):
+            self._entries.append(
+                (f"{datetime.fromisoformat(record['ts']):%H:%M:%S}", record["text"], self._record_color(record))
+            )
+        self._render_history()
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addLayout(input_row)
@@ -225,11 +237,27 @@ class EventPanel(QtWidgets.QWidget):
         self._layout_buttons()
         self._save_buttons()
 
-    def _show_in_history(self, line: str) -> None:
+    def _record_color(self, record: dict) -> str:
+        """时间戳颜色：记录里存了当时界面上的颜色就用它，旧记录按当时的心率现算"""
+        if record.get("color"):
+            return record["color"]
+        if record.get("hr") is not None and self._hr_color is not None:
+            return self._hr_color(record["hr"])
+        return HISTORY_TEXT_COLOR
+
+    def _show_in_history(self, text: str, stamp: str = "", color: str = HISTORY_TEXT_COLOR) -> None:
         # 最新的在最上面，只留 HISTORY_ROWS 条
-        self.history.insertItem(0, line)
-        while self.history.count() > HISTORY_ROWS:
-            self.history.takeItem(self.history.count() - 1)
+        self._entries.insert(0, (stamp, text, color))
+        del self._entries[HISTORY_ROWS:]
+        self._render_history()
+
+    def _render_history(self) -> None:
+        rows = "".join(
+            f'<tr><td style="color: {color}; white-space: nowrap; padding-right: 14px;">{stamp}</td>'
+            f"<td>{html.escape(text)}</td></tr>"
+            for stamp, text, color in self._entries
+        )
+        self.history.setHtml(f'<table cellspacing="0" cellpadding="0">{rows}</table>')
 
     def send_input(self) -> None:
         self._send(self.input.text(), "input", time.time())
@@ -262,5 +290,5 @@ class EventPanel(QtWidgets.QWidget):
         self.input.clear()
         self.input.add_tags(parse_tags(record["text"]))
         stamp = time.strftime("%H:%M:%S", time.localtime(now))
-        self._show_in_history(f"{stamp} {record['text']}")
+        self._show_in_history(record["text"], stamp, self._record_color(record))
         print(f"[{stamp}] 事件：{record['text']}", flush=True)
