@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 import os
 import time
+import unicodedata
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
@@ -46,6 +47,7 @@ class HUDText:
         font_size=12,
         bold=False,
     ):
+        self.text = text
         self.item = pg.TextItem(text=text, color=color, anchor=anchor)
         weight = QtGui.QFont.Bold if bold else QtGui.QFont.Normal
         self.item.setFont(QtGui.QFont(font_family, font_size, weight))
@@ -53,6 +55,7 @@ class HUDText:
         plot.addItem(self.item)
 
     def set_text(self, text: str):
+        self.text = text
         self.item.setText(text)
 
     def set_color(self, color):
@@ -239,6 +242,9 @@ class BaseMonitor:
             self.sdnn_text.set_text(f"SDNN: {sdnn:.0f} ms")
             self.rmssd_text.set_text(f"RMSSD: {rmssd:.0f} ms")
 
+    def maybe_print_status(self):
+        pass
+
     def update_hr_display(self):
         now = time.time()
         peaks, _ = find_peaks(self.runtime.data, height=350, distance=20)
@@ -276,6 +282,7 @@ class BaseMonitor:
 
         self.update_plot()
         self.update_hr_display()
+        self.maybe_print_status()
         self.runtime.logfile.flush()
 
     def run(self):
@@ -347,10 +354,16 @@ class Monitor250Hz(BaseMonitor):
 
 
 class RoastMonitor(BaseMonitor):
+    print_interval_seconds = 30.0
+    roast_column_width = 12
+
     def __init__(self):
         super().__init__()
         self.roast_text = None
         self.time_window = 10
+        self.current_mean_hr = None
+        self.current_roast_text = "Are you ok?"
+        self._last_status_print = time.time()
 
     def setup_ui(self):
         self.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -432,12 +445,58 @@ class RoastMonitor(BaseMonitor):
         self.lead_text.set_color((0, 255, 0))
         window_mean_hr = 60 / np.mean(rr)
         roast_color = self.hr_roast_color(window_mean_hr)
+        self.current_mean_hr = window_mean_hr
+        self.current_roast_text = self.hr_roast(window_mean_hr)
         self.hr_text.set_text(f"{hr:.0f}")
         self.rr_text.set_text(f"RR Interval: {rr[-1]:.2f} s")
-        self.roast_text.set_text(f"[{window_mean_hr:0=.0f}] {self.hr_roast(window_mean_hr)}")
+        self.roast_text.set_text(f"[{window_mean_hr:0=.0f}] {self.current_roast_text}")
         self.hr_text.set_color(roast_color)
         self.ecg_text.set_color(roast_color)
         self.roast_text.set_color(roast_color)
+
+    @staticmethod
+    def _metric_text(value):
+        if value is None:
+            return "--"
+        return f"{value:.0f}"
+
+    @staticmethod
+    def _display_width(text):
+        width = 0
+        for char in text:
+            width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        return width
+
+    @classmethod
+    def _pad_display(cls, text, width):
+        padding = max(0, width - cls._display_width(text))
+        return text + (" " * padding)
+
+    @staticmethod
+    def _roast_phrase(display_text):
+        if "] " in display_text:
+            return display_text.split("] ", 1)[1]
+        return display_text
+
+    def maybe_print_status(self):
+        now = time.time()
+        if now - self._last_status_print < self.print_interval_seconds:
+            return
+        self._last_status_print = now
+
+        sdnn, rmssd = self.runtime.update_hrv()
+        timestamp = time.strftime("%H:%M:%S", time.localtime())
+        display_roast_text = getattr(self.roast_text, "text", self.current_roast_text)
+        roast_text = self._roast_phrase(display_roast_text)
+        mean_hr = None if getattr(self.hr_text, "text", "--") in {"--", "-?-"} else self.current_mean_hr
+        roast_column = self._pad_display(roast_text, self.roast_column_width)
+        print(
+            f"[{timestamp}] {roast_column} : "
+            f"HR {self._metric_text(mean_hr):>3} bpm, "
+            f"SDNN {self._metric_text(sdnn):>3} ms, "
+            f"RMSSD {self._metric_text(rmssd):>3} ms",
+            flush=True,
+        )
 
 
 class ECGRespRuntime:
