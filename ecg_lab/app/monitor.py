@@ -68,6 +68,10 @@ class MonitorRuntime:
     frame_header = b"\xAA\x55"
     frame_len = 17
     dt_raw = 0.004
+    peak_height_window = 500  # 每帧一个点，约 10 秒
+    peak_height_min_samples = 100
+    peak_height_fraction = 0.4
+    peak_height_fallback = 350
 
     def __init__(self):
         load_dotenv(dotenv_path=get_repo_root() / ".env")
@@ -142,6 +146,20 @@ class MonitorRuntime:
         self.data[-1] = np.nan if lead_off else ecg
         self.lead_data[:-1] = self.lead_data[1:]
         self.lead_data[-1] = lead_off
+
+    def peak_height(self):
+        """R 峰检测阈值：跟着最近一段信号的基线和 R 波高度走。
+
+        固定阈值在基线漂移后（比如重新贴电极）会把 P 波、T 波也算成心搏。
+        """
+        recent = self.data[-self.peak_height_window :]
+        # NaN 是导联脱落，0 是还没被真实数据填满的初始缓冲区
+        recent = recent[np.isfinite(recent) & (recent > 0)]
+        if len(recent) < self.peak_height_min_samples:
+            return self.peak_height_fallback
+        baseline = np.median(recent)
+        r_level = np.percentile(recent, 99)
+        return baseline + self.peak_height_fraction * (r_level - baseline)
 
     def maybe_append_rr(self, last_peak_t, hr):
         rr_in_arr = False
@@ -249,7 +267,7 @@ class BaseMonitor:
 
     def update_hr_display(self):
         now = time.time()
-        peaks, _ = find_peaks(self.runtime.data, height=350, distance=20)
+        peaks, _ = find_peaks(self.runtime.data, height=self.runtime.peak_height(), distance=20)
         if len(peaks) < 2:
             return
 
