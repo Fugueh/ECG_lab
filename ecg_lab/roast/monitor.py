@@ -6,12 +6,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from pyqtgraph.Qt import QtCore, QtWidgets
+from pyqtgraph.Qt import QtWidgets
 
 from ecg_lab.app.monitor import MonitorRuntime, RoastMonitor
 
 from .context import RoastContextRecorder
-from .event_panel import EventPanel
+from .event_panel import EventPanel, set_always_on_top
 from .phrases import hrv_roast
 from .signal_quality import describe_quality, score_minute
 
@@ -122,7 +122,8 @@ class ContextRoastMonitor(RoastMonitor):
         )
         self.container = QtWidgets.QWidget()
         self.container.setWindowTitle(self.window.windowTitle())
-        self.container.setWindowFlags(self.container.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        set_always_on_top(self.container, True)
+        self.event_panel.pin_toggled.connect(lambda on: set_always_on_top(self.container, on))
         self.window.setFixedSize(self.event_panel.width(), self.window.height())
         layout = QtWidgets.QVBoxLayout(self.container)
         layout.setContentsMargins(0, 0, 0, 0)

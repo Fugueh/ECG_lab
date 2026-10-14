@@ -28,9 +28,18 @@ def launch_event_panel() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     panel = EventPanel()
     panel.setWindowTitle("Roast 事件")
-    panel.setWindowFlags(panel.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+    panel.pin_toggled.connect(lambda on: set_always_on_top(panel, on))
+    set_always_on_top(panel, True)
     panel.show()
     app.exec_()
+
+
+def set_always_on_top(window: QtWidgets.QWidget, on: bool) -> None:
+    """切换窗口置顶。改窗口标志会让窗口隐藏，所以已经显示的要重新 show。"""
+    was_visible = window.isVisible()
+    window.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, on)
+    if was_visible:
+        window.show()
 
 
 class TagLineEdit(QtWidgets.QLineEdit):
@@ -146,6 +155,8 @@ class EventPanel(QtWidgets.QWidget):
 
     # 按钮增删导致面板高度变化时发出，外层窗口据此重新固定大小
     resized = QtCore.pyqtSignal()
+    # 图钉按钮切换置顶时发出，由外层窗口决定怎么应用
+    pin_toggled = QtCore.pyqtSignal(bool)
 
     def __init__(self, context_provider=None, directory=None, hr_color=None):
         super().__init__()
@@ -162,9 +173,19 @@ class EventPanel(QtWidgets.QWidget):
         send_button = QtWidgets.QPushButton("发送")
         send_button.clicked.connect(self.send_input)
 
+        # 图钉：按下 = 窗口置顶（默认），弹起 = 取消置顶
+        self.pin_button = QtWidgets.QPushButton("📌")
+        self.pin_button.setCheckable(True)
+        self.pin_button.setChecked(True)
+        self.pin_button.setFixedWidth(36)
+        self.pin_button.setStyleSheet("QPushButton:checked { background: #bcd7f5; }")
+        self.pin_button.setToolTip("窗口置顶（按下 = 置顶）")
+        self.pin_button.toggled.connect(self.pin_toggled)
+
         input_row = QtWidgets.QHBoxLayout()
         input_row.addWidget(self.input)
         input_row.addWidget(send_button)
+        input_row.addWidget(self.pin_button)
 
         self.buttons = [self._make_button(label) for label in labels]
         self.add_button = QtWidgets.QPushButton("+")
