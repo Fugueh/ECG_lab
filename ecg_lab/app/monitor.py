@@ -83,6 +83,7 @@ class MonitorRuntime:
         self.timestamps = np.linspace(now - self.settings.time_window, now, self.settings.window)
         self.data = np.zeros(self.settings.window)
         self.lead_data = np.zeros(self.settings.window)
+        self.samples_pushed = 0
         self.rr_buf = deque(maxlen=int(5 * 60 * 4))
         self.beat_count = 0
         self._last_hrv_ui = 0.0
@@ -149,6 +150,7 @@ class MonitorRuntime:
         self.data[-1] = np.nan if lead_off else ecg
         self.lead_data[:-1] = self.lead_data[1:]
         self.lead_data[-1] = lead_off
+        self.samples_pushed += 1
 
     def peak_height(self):
         """R 峰检测阈值：跟着最近一段信号的基线和 R 波高度走。
@@ -378,11 +380,16 @@ class Monitor250Hz(BaseMonitor):
 
 class RoastMonitor(BaseMonitor):
     print_interval_seconds = 60.0
+    # 像监护仪一样从左往右扫描刷新，扫描线前面留一段空白（黑条）擦掉旧波形
+    SWEEP_GAP_S = 0.25
 
     def __init__(self):
         super().__init__()
         self.roast_text = None
         self.time_window = 10
+        frame_s = 5 * self.runtime.dt_raw
+        self.sweep = SweepTrace(self.time_window, frame_s, self.SWEEP_GAP_S / self.time_window)
+        self._swept = 0
         self.current_mean_hr = None
         self.current_roast_text = "Are you ok?"
         self._last_status_print = time.time()
@@ -399,7 +406,7 @@ class RoastMonitor(BaseMonitor):
 
         self.plot = self.window.addPlot()
         self.curve_ecg = self.plot.plot(pen=pg.mkPen((0, 255, 0), width=1.2))
-        self.plot.setXRange(-self.time_window, 0)
+        self.plot.setXRange(0, self.time_window)
         self.plot.setYRange(150, self.ymax)
         self.plot.showGrid(x=True, y=True, alpha=0.3)
 
@@ -413,13 +420,22 @@ class RoastMonitor(BaseMonitor):
 
         distance = 85
         yloc = self.ymax + 30
-        self.roast_text = HUDText(self.plot, "[--] Are you ok?", (-self.time_window, yloc), color=(0, 255, 0), anchor=(0, 0), font_size=10)
-        self.rr_text = HUDText(self.plot, "RR Interval: -- s", (-self.time_window, yloc - distance), anchor=(0, 0), font_size=10)
-        self.sdnn_text = HUDText(self.plot, "SDNN: -- ms", (-self.time_window, yloc - 2 * distance), anchor=(0, 0), font_size=10)
-        self.rmssd_text = HUDText(self.plot, "RMSSD: -- ms", (-self.time_window, yloc - 3 * distance), anchor=(0, 0), font_size=10)
-        self.hr_text = HUDText(self.plot, "--", (0, yloc + 50), color=(0, 255, 0), anchor=(1, 0), font_size=50, bold=True)
-        self.ecg_text = HUDText(self.plot, "ECG\nbpm", (-3, yloc), color=(0, 255, 0), anchor=(1, 0), font_size=10)
-        self.lead_text = HUDText(self.plot, "NORMAL", (-3, yloc - 200), color=(0, 255, 0), anchor=(1, 0), font_size=10)
+        self.roast_text = HUDText(self.plot, "[--] Are you ok?", (0, yloc), color=(0, 255, 0), anchor=(0, 0), font_size=10)
+        self.rr_text = HUDText(self.plot, "RR Interval: -- s", (0, yloc - distance), anchor=(0, 0), font_size=10)
+        self.sdnn_text = HUDText(self.plot, "SDNN: -- ms", (0, yloc - 2 * distance), anchor=(0, 0), font_size=10)
+        self.rmssd_text = HUDText(self.plot, "RMSSD: -- ms", (0, yloc - 3 * distance), anchor=(0, 0), font_size=10)
+        self.hr_text = HUDText(self.plot, "--", (self.time_window, yloc + 50), color=(0, 255, 0), anchor=(1, 0), font_size=50, bold=True)
+        self.ecg_text = HUDText(self.plot, "ECG\nbpm", (self.time_window - 3, yloc), color=(0, 255, 0), anchor=(1, 0), font_size=10)
+        self.lead_text = HUDText(self.plot, "NORMAL", (self.time_window - 3, yloc - 200), color=(0, 255, 0), anchor=(1, 0), font_size=10)
+
+    def update_plot(self):
+        # 把上次刷新以来新推进缓冲区的点依次写到扫描线的位置
+        new_points = min(self.runtime.samples_pushed - self._swept, len(self.runtime.data))
+        for value in self.runtime.data[len(self.runtime.data) - new_points :]:
+            self.sweep.push(value)
+        self._swept = self.runtime.samples_pushed
+        # NaN（导联脱落、扫描线前的空白）处断开，不连线
+        self.curve_ecg.setData(self.sweep.x, self.sweep.y, connect="finite")
 
     @staticmethod
     def hr_roast(hr):
