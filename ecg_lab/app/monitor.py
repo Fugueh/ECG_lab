@@ -32,7 +32,10 @@ def launch_monitor(variant: str = "250hz", save_csv: bool = False) -> None:
         launch_roast_monitor(save_csv=save_csv)
         return
     if variant == "ecgresp":
-        ECGRespMonitor().run()
+        # 每分钟数据记录在 ecg_lab.roast.ecgresp 里，界面和 CSV 不变
+        from ecg_lab.roast.ecgresp import launch_ecgresp_monitor
+
+        launch_ecgresp_monitor()
         return
     raise ValueError(f"Unknown monitor variant: {variant}")
 
@@ -736,6 +739,24 @@ class ECGRespRuntime:
     def resp_frame_to_display(filtered_samples: np.ndarray) -> float:
         return float(np.mean(filtered_samples))
 
+class SweepTrace:
+    """监护仪式扫描显示的一条波形：横轴固定，新数据从左往右覆盖旧数据。"""
+
+    def __init__(self, span_s: float, point_s: float, gap_fraction: float):
+        self.points = int(round(span_s / point_s))
+        # 空白宽度按屏幕比例算，扫得慢的波形空白对应的时间更长，看起来一样宽
+        self.gap_points = max(1, int(round(self.points * gap_fraction)))
+        self.x = np.arange(self.points) * point_s
+        self.y = np.full(self.points, np.nan)
+        self.index = 0
+
+    def push(self, value: float) -> None:
+        self.y[self.index] = value
+        gap = (self.index + 1 + np.arange(self.gap_points)) % self.points
+        self.y[gap] = np.nan
+        self.index = (self.index + 1) % self.points
+
+
 class ECGRespMonitor:
     #ECG_Y_RANGE = (-200000, 200000)
     ECG_Y_RANGE = (-20000, 80000)
@@ -743,6 +764,10 @@ class ECGRespMonitor:
     HUD_RIGHT_PAD_RATIO = 0.75
     HUD_TOP_PAD_RATIO = 0.04
     HUD_LINE_GAP_RATIO = 0.07
+    # 像监护仪一样从左往右扫描刷新，扫描线前面留一段空白（黑条）擦掉旧波形。
+    # 呼吸扫得比心电慢（监护仪上常见 6.25 mm/s 对 25 mm/s），一屏显示 40 秒
+    SWEEP_GAP_S = 0.25
+    RESP_SWEEP_S = 40
 
     def __init__(self):
         self.runtime = ECGRespRuntime()
@@ -759,6 +784,10 @@ class ECGRespMonitor:
         self.rr_text = None
         self.info_text = None
         self.last_packet_text = None
+        packet_s = self.runtime.samples_per_packet * self.runtime.dt_raw
+        gap_fraction = self.SWEEP_GAP_S / self.runtime.settings.time_window
+        self.sweep_ecg = SweepTrace(self.runtime.settings.time_window, packet_s, gap_fraction)
+        self.sweep_resp = SweepTrace(self.RESP_SWEEP_S, packet_s, gap_fraction)
 
     def setup_ui(self):
         self.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -767,8 +796,8 @@ class ECGRespMonitor:
         self.window.setBackground("k")
 
         self.plot_ecg = self.window.addPlot(title="ECG")
-        self.curve_ecg = self.plot_ecg.plot(pen=pg.mkPen((0, 255, 0), width=1.2))
-        self.plot_ecg.setXRange(-self.runtime.settings.time_window, 0)
+        self.curve_ecg = self.plot_ecg.plot(pen=pg.mkPen((0, 255, 0), width=2.5))
+        self.plot_ecg.setXRange(0, self.runtime.settings.time_window, padding=0)
         self.plot_ecg.setYRange(*self.ECG_Y_RANGE, padding=0)
         self.plot_ecg.showGrid(x=True, y=True, alpha=0.3)
         self.plot_ecg.setLabel("left", "ECG")
@@ -796,8 +825,8 @@ class ECGRespMonitor:
 
         self.window.nextRow()
         self.plot_resp = self.window.addPlot(title="RESP")
-        self.curve_resp = self.plot_resp.plot(pen=pg.mkPen((255, 255, 0), width=1.2))
-        self.plot_resp.setXRange(-self.runtime.settings.time_window, 0)
+        self.curve_resp = self.plot_resp.plot(pen=pg.mkPen((255, 255, 0), width=2.5))
+        self.plot_resp.setXRange(0, self.RESP_SWEEP_S, padding=0)
         self.plot_resp.showGrid(x=True, y=True, alpha=0.3)
         self.plot_resp.setLabel("left", "RESP")
         self.plot_resp.setLabel("bottom", "Time (s)", **{"color": "#AAA", "font-size": "10pt"})
@@ -842,9 +871,9 @@ class ECGRespMonitor:
             self.rr_text.item.setPos(resp_right_x + resp_x_span * 0.07, resp_top_y + 0.5 * resp_line_gap)
 
     def update_plot(self):
-        t_rel = self.runtime.timestamps - self.runtime.timestamps[-1]
-        self.curve_ecg.setData(t_rel, self.runtime.ecg)
-        self.curve_resp.setData(t_rel, self.runtime.resp)
+        # NaN 处断开，扫描线前面的空白和回到左边的那一下都不会连线
+        self.curve_ecg.setData(self.sweep_ecg.x, self.sweep_ecg.y, connect="finite")
+        self.curve_resp.setData(self.sweep_resp.x, self.sweep_resp.y, connect="finite")
 
         """
         ecg_valid = self.runtime.ecg[np.isfinite(self.runtime.ecg)]
@@ -854,7 +883,7 @@ class ECGRespMonitor:
             ecg_pad = max(1000.0, (ecg_max - ecg_min) * 0.15)
             self.plot_ecg.setYRange(ecg_min - ecg_pad, ecg_max + ecg_pad, padding=0)
         """
-        resp_valid = self.runtime.resp[np.isfinite(self.runtime.resp)]
+        resp_valid = self.sweep_resp.y[np.isfinite(self.sweep_resp.y)]
         if resp_valid.size:
             resp_min = float(np.min(resp_valid))
             resp_max = float(np.max(resp_valid))
@@ -894,6 +923,8 @@ class ECGRespMonitor:
             filtered_resp_samples = self.runtime.filter_resp_samples(samples[:, 1])
             resp_display = self.runtime.resp_frame_to_display(filtered_resp_samples)
             self.runtime.push_sample(t_recv, ecg_display, resp_display)
+            self.sweep_ecg.push(ecg_display)
+            self.sweep_resp.push(resp_display)
 
             t0 = t_recv - (self.runtime.samples_per_packet - 1) * self.runtime.dt_raw
             for i in range(self.runtime.samples_per_packet):

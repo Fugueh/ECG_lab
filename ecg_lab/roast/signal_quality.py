@@ -36,7 +36,20 @@ def score_minute(samples, sampling_rate: int = 250) -> dict | None:
         "score": float(np.mean(quality)),
         "bad_beat_ratio": float(np.mean(beat_quality < BAD_BEAT_SCORE)),
         "beats": int(len(rpeaks)),
+        "rr_s": (np.diff(rpeaks) / sampling_rate).tolist(),
     }
+
+
+def _grade(score: float, bad_ratio: float):
+    for min_score, max_bad_ratio, label, name, quip in GRADES:
+        if score >= min_score and bad_ratio <= max_bad_ratio:
+            return label, name, quip
+    return WORST_GRADE
+
+
+def grade_label(score: float, bad_ratio: float) -> str:
+    """只要标签（A/B/C/D），不要解释和吐槽"""
+    return _grade(score, bad_ratio)[0]
 
 
 def describe_quality(metrics: dict | None, beats_ok: int, beats_rejected: int, lead_off_s: float, error: str | None = None) -> dict:
@@ -53,11 +66,7 @@ def describe_quality(metrics: dict | None, beats_ok: int, beats_rejected: int, l
 
     score = metrics["score"]
     bad_ratio = metrics["bad_beat_ratio"]
-    label, name, quip = WORST_GRADE
-    for min_score, max_bad_ratio, grade_label, grade_name, grade_quip in GRADES:
-        if score >= min_score and bad_ratio <= max_bad_ratio:
-            label, name, quip = grade_label, grade_name, grade_quip
-            break
+    label, name, quip = _grade(score, bad_ratio)
 
     reasons = [f"nk2 质量 {score:.2f}", f"{metrics['beats']} 拍中 {bad_ratio:.0%} 形态走样"]
     if abs(metrics["beats"] - beats_ok) >= 5:

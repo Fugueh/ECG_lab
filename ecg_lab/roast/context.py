@@ -26,9 +26,9 @@ def get_roast_context_dir() -> Path:
     return get_repo_root() / "roast_context"
 
 
-def append_record(directory: Path, record: dict, now: float) -> None:
-    """往当天的 JSONL 追加一条记录（分钟数据和用户事件共用同一个文件）"""
-    path = Path(directory) / f"roast_{datetime.fromtimestamp(now):%Y-%m-%d}.jsonl"
+def append_record(directory: Path, record: dict, now: float, prefix: str = "roast") -> None:
+    """往当天的 JSONL 追加一条记录（分钟数据和用户事件共用同一个文件；prefix 区分不同监视器）"""
+    path = Path(directory) / f"{prefix}_{datetime.fromtimestamp(now):%Y-%m-%d}.jsonl"
     Path(directory).mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -138,11 +138,11 @@ class RoastContextRecorder:
         self._reset_minute()
 
 
-def load_records(directory: Path, since: datetime, until: datetime) -> list[dict]:
+def load_records(directory: Path, since: datetime, until: datetime, prefix: str = "roast") -> list[dict]:
     records = []
     day = since.date()
     while day <= until.date():
-        path = Path(directory) / f"roast_{day:%Y-%m-%d}.jsonl"
+        path = Path(directory) / f"{prefix}_{day:%Y-%m-%d}.jsonl"
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
                 try:
@@ -198,8 +198,14 @@ def _mean_text(group: list[dict], key: str, spec: str = ".0f") -> str:
     return format(sum(values) / len(values), spec) if values else "--"
 
 
-def _history_table(minutes: list[dict], now: datetime) -> list[str]:
-    """越久远越粗：最近 HOURLY_WINDOW_HOURS 小时按小时聚合，更早的按天，避免上下文过长"""
+HISTORY_HEADING = f"## history (per hour for the last {HOURLY_WINDOW_HOURS} h, per day before that)"
+
+
+def bucket_by_age(minutes: list[dict], now: datetime) -> tuple[dict[str, list[dict]], int]:
+    """越久远越粗：最近 HOURLY_WINDOW_HOURS 小时按小时分组，更早的按天，最多 MAX_DAILY_ROWS 天。
+
+    返回 (分组, 被省略的天数)。
+    """
     hourly_since = now - timedelta(hours=HOURLY_WINDOW_HOURS)
     daily: dict[str, list[dict]] = {}
     hourly: dict[str, list[dict]] = {}
@@ -208,13 +214,16 @@ def _history_table(minutes: list[dict], now: datetime) -> list[str]:
             hourly.setdefault(f"{minute['_t']:%m-%d %H}h", []).append(minute)
         else:
             daily.setdefault(f"{minute['_t']:%m-%d}", []).append(minute)
-
-    lines = [f"## history (per hour for the last {HOURLY_WINDOW_HOURS} h, per day before that)"]
     day_keys = list(daily)
-    if len(day_keys) > MAX_DAILY_ROWS:
-        lines.append(f"({len(day_keys) - MAX_DAILY_ROWS} older days omitted)")
-        day_keys = day_keys[-MAX_DAILY_ROWS:]
-    buckets = {key: daily[key] for key in day_keys} | hourly
+    omitted = max(0, len(day_keys) - MAX_DAILY_ROWS)
+    return {key: daily[key] for key in day_keys[omitted:]} | hourly, omitted
+
+
+def _history_table(minutes: list[dict], now: datetime) -> list[str]:
+    buckets, omitted = bucket_by_age(minutes, now)
+    lines = [HISTORY_HEADING]
+    if omitted:
+        lines.append(f"({omitted} older days omitted)")
     keys = list(buckets)
     lines.append("| when | min | HR mean (lo-hi) | SDNN | RMSSD | top verdict | flips | rejected | lead off s | nk2 score |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
